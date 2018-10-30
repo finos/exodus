@@ -1,0 +1,33 @@
+  {
+    "employeeSurname" : "LEIGH",
+    "age" : 27,
+    "jobTitle" : "DEVELOPER",
+    "bossName" : "TYLER",
+    "employmentDetail" :
+    {
+      "hireDate" : "2013-07-01",
+      "salary" : 27500,
+      "department" :
+      {
+        "name" : "RESEARCH",
+        "location" : "NEW YORK"
+      }
+    },
+    "projects" :
+    [
+      {
+        "projectName" : "To Infinity And Beyond",
+        "startDate" : "2010-05-15",
+        "endDate" : "2013-06-20"
+      },
+      {
+        "projectName" : "Mission To Mars",
+        "startDate" : "2013-07-01",
+        "endDate" : "2015-12-20"
+      },
+      {
+        "projectName" : "Destination Moon",
+        "startDate" : "2015-12-21"
+      }
+    ]
+  }

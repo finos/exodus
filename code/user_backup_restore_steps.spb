@@ -1,0 +1,307 @@
+CREATE OR REPLACE PACKAGE BODY user_backup_restore_steps IS
+
+   /*=================================================================================================
+       Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
+       
+       Developed by Christian Leigh
+
+       Copyright 2018 IHS Markit
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+     =================================================================================================  
+   */
+   
+   PROCEDURE pr_exec(i_exec IN VARCHAR2) IS
+   BEGIN
+      dbms_output.put_line('Executing : ' || i_exec);
+      EXECUTE IMMEDIATE i_exec;
+   END pr_exec;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE pr_handle_constraint
+   (
+      i_schema_name IN VARCHAR2
+     ,i_mode        IN VARCHAR2
+   ) IS
+   BEGIN
+      FOR c IN (SELECT DISTINCT c.owner
+                               ,c.table_name
+                               ,c.constraint_name
+                  FROM dba_constraints c
+                      ,dba_tables      t
+                 WHERE c.table_name = t.table_name
+                   AND c.constraint_type = 'R'
+                   AND c.owner = i_schema_name
+                   AND t.owner = i_schema_name)
+      LOOP
+         FOR d IN (SELECT p.table_name       parent_table
+                         ,c1.table_name      child_table
+                         ,c1.owner
+                         ,p.constraint_name  parent_constraint
+                         ,c1.constraint_name child_constraint
+                     FROM dba_constraints p
+                     JOIN dba_constraints c1
+                       ON (p.constraint_name = c1.r_constraint_name AND
+                          c1.owner = i_schema_name)
+                    WHERE (p.constraint_type = 'P' OR
+                          p.constraint_type = 'U')
+                      AND c1.constraint_type = 'R'
+                      AND (c1.constraint_name = c.constraint_name OR
+                          p.constraint_name = c.constraint_name)
+                      AND p.owner = i_schema_name)
+         LOOP
+            IF i_mode = 'DISABLE'
+            THEN
+               dbms_output.put_line('. Disable the constraint ' ||
+                                    d.child_constraint ||
+                                    ' (on table ' || d.owner || '.' ||
+                                    d.child_table || ')');
+               pr_exec(i_exec => 'alter table ' || d.owner || '.' ||
+                                 d.child_table ||
+                                 ' disable constraint ' ||
+                                 d.child_constraint);
+            ELSIF i_mode = 'ENABLE'
+            THEN
+               dbms_output.put_line('. Enable the constraint ' ||
+                                    d.child_constraint ||
+                                    ' (on table ' || d.owner || '.' ||
+                                    d.child_table || ')');
+               pr_exec(i_exec => 'alter table ' || d.owner || '.' ||
+                                 d.child_table ||
+                                 ' enable constraint ' ||
+                                 d.child_constraint);
+            END IF;
+         END LOOP;
+      END LOOP;
+   END pr_handle_constraint;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE pr_backup_schema
+   (
+      i_schema_name    IN VARCHAR2
+     ,i_context        IN VARCHAR2
+     ,i_overwrite_bool IN BOOLEAN
+   ) IS
+      ex_already_exists EXCEPTION;
+      PRAGMA EXCEPTION_INIT(ex_already_exists, -955);
+   BEGIN
+      IF i_schema_name = 'PRE_ETL_OWNER'
+      THEN
+         raise_application_error(-20000
+                                ,'user_backup_restore_steps : pr_backup_schema : DO NOT USE PRE_ETL_OWNER this could damage the meta data.');
+      END IF;
+      --
+      FOR i_buf IN (SELECT pkg_pre_etl_tools.fn_contextualize(i_subject => 'CREATE TABLE BK_' ||
+                                                                           table_name ||
+                                                                           ' AS SELECT /*+parallel ( ${parallelism} ) NO_GATHER_OPTIMIZER_STATISTICS */ * FROM ' ||
+                                                                           i_schema_name || '.' ||
+                                                                           table_name
+                                                             ,i_context => i_context) AS stmt
+                          ,'BK_' || table_name AS backup_table
+                      FROM dba_tables dt
+                     WHERE dt.owner = upper(i_schema_name)
+                       AND dt.table_name IN
+                           (SELECT /* only handles the tables we can migrate to */
+                            DISTINCT TRIM(REPLACE(REPLACE(ltrim(REPLACE(REPLACE(REPLACE(pejl.json_line
+                                                                                       ,' '
+                                                                                       ,NULL)
+                                                                               ,','
+                                                                               ,NULL)
+                                                                       ,chr(9)
+                                                                       ,NULL)
+                                                               ,'"TABLE_NAME"')
+                                                         ,':"'
+                                                         ,NULL)
+                                                 ,'"'
+                                                 ,NULL))
+                              FROM pre_etl_json_document pejd
+                              JOIN pre_etl_json_lines pejl
+                                ON (pejl.document_name =
+                                   pejd.document_name AND
+                                   pejl.json_line LIKE
+                                   '%"TABLE_NAME"%:%')
+                             WHERE pejd.document_type =
+                                   'TABLE DOCUMENT'))
+      LOOP
+         BEGIN
+            pr_exec(i_exec => i_buf.stmt);
+         EXCEPTION
+            WHEN ex_already_exists THEN
+               IF i_overwrite_bool
+               THEN
+                  pr_exec(i_exec => 'drop table ' ||
+                                    i_buf.backup_table);
+                  pr_exec(i_exec => i_buf.stmt);
+               ELSE
+                  RAISE;
+               END IF;
+         END;
+      END LOOP;
+   
+   END pr_backup_schema;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE pr_restore_schema
+   (
+      i_schema_name IN VARCHAR2
+     ,i_context     IN VARCHAR2
+   ) IS
+   BEGIN
+      IF i_schema_name = 'PRE_ETL_OWNER'
+      THEN
+         raise_application_error(-20000
+                                ,'user_backup_restore_steps : pr_restore_schema : DO NOT USE PRE_ETL_OWNER this could damage the meta data.');
+      END IF;
+      --
+      pr_handle_constraint(i_schema_name => i_schema_name
+                          ,i_mode        => 'DISABLE');
+      FOR i_buf IN (SELECT pkg_pre_etl_tools.fn_contextualize(i_subject => 'INSERT /*+APPEND */ INTO ' ||
+                                                                           i_schema_name || '.' ||
+                                                                           table_name ||
+                                                                           ' SELECT /*+parallel ( ${parallelism} ) */ * FROM BK_' ||
+                                                                           table_name
+                                                             ,i_context => i_context) AS stmt
+                          ,'TRUNCATE TABLE ' || i_schema_name || '.' ||
+                           table_name AS trunc_stmt
+                      FROM dba_tables dt
+                     WHERE dt.owner = upper(i_schema_name)
+                       AND dt.table_name IN
+                           (SELECT /* only handles the tables we can migrate to */
+                            DISTINCT TRIM(REPLACE(REPLACE(ltrim(REPLACE(REPLACE(REPLACE(pejl.json_line
+                                                                                       ,' '
+                                                                                       ,NULL)
+                                                                               ,','
+                                                                               ,NULL)
+                                                                       ,chr(9)
+                                                                       ,NULL)
+                                                               ,'"TABLE_NAME"')
+                                                         ,':"'
+                                                         ,NULL)
+                                                 ,'"'
+                                                 ,NULL))
+                              FROM pre_etl_json_document pejd
+                              JOIN pre_etl_json_lines pejl
+                                ON (pejl.document_name =
+                                   pejd.document_name AND
+                                   pejl.json_line LIKE
+                                   '%"TABLE_NAME"%:%')
+                             WHERE pejd.document_type =
+                                   'TABLE DOCUMENT'))
+      LOOP
+         pr_exec(i_exec => i_buf.trunc_stmt);
+         pr_exec(i_exec => i_buf.stmt);
+      END LOOP;
+      --
+      pr_handle_constraint(i_schema_name => i_schema_name
+                          ,i_mode        => 'ENABLE');
+   END pr_restore_schema;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE pr_truncate_schema(i_schema_name IN VARCHAR2) IS
+   BEGIN
+      IF i_schema_name = 'PRE_ETL_OWNER'
+      THEN
+         raise_application_error(-20000
+                                ,'user_backup_restore_steps : pr_truncate_schema : DO NOT USE PRE_ETL_OWNER this could damage the meta data.');
+      END IF;
+      --
+      pr_handle_constraint(i_schema_name => i_schema_name
+                          ,i_mode        => 'DISABLE');
+      FOR i_buf IN (SELECT 'TRUNCATE TABLE ' || i_schema_name || '.' ||
+                           table_name AS trunc_stmt
+                      FROM dba_tables dt
+                     WHERE dt.owner = upper(i_schema_name)
+                       AND dt.table_name IN
+                           (SELECT /* only handles the tables we can migrate to */
+                            DISTINCT TRIM(REPLACE(REPLACE(ltrim(REPLACE(REPLACE(REPLACE(pejl.json_line
+                                                                                       ,' '
+                                                                                       ,NULL)
+                                                                               ,','
+                                                                               ,NULL)
+                                                                       ,chr(9)
+                                                                       ,NULL)
+                                                               ,'"TABLE_NAME"')
+                                                         ,':"'
+                                                         ,NULL)
+                                                 ,'"'
+                                                 ,NULL))
+                              FROM pre_etl_json_document pejd
+                              JOIN pre_etl_json_lines pejl
+                                ON (pejl.document_name =
+                                   pejd.document_name AND
+                                   pejl.json_line LIKE
+                                   '%"TABLE_NAME"%:%')
+                             WHERE pejd.document_type =
+                                   'TABLE DOCUMENT'))
+      LOOP
+         pr_exec(i_exec => i_buf.trunc_stmt);
+      END LOOP;
+      --
+      pr_handle_constraint(i_schema_name => i_schema_name
+                          ,i_mode        => 'ENABLE');
+   END pr_truncate_schema;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE pr_remove_backups(i_schema_name IN VARCHAR2) IS
+      ex_table_not_exist EXCEPTION;
+      PRAGMA EXCEPTION_INIT(ex_table_not_exist, -00942);
+   BEGIN
+      IF i_schema_name = 'PRE_ETL_OWNER'
+      THEN
+         raise_application_error(-20000
+                                ,'user_backup_restore_steps : pr_remove_backups : DO NOT USE PRE_ETL_OWNER this could damage the meta data.');
+      END IF;
+      --
+      FOR i_buf IN (SELECT 'DROP TABLE BK_' || table_name AS stmt
+                      FROM dba_tables dt
+                     WHERE dt.owner = upper(i_schema_name)
+                       AND dt.table_name IN
+                           (SELECT /* only handles the tables we can migrate to */
+                            DISTINCT TRIM(REPLACE(REPLACE(ltrim(REPLACE(REPLACE(REPLACE(pejl.json_line
+                                                                                       ,' '
+                                                                                       ,NULL)
+                                                                               ,','
+                                                                               ,NULL)
+                                                                       ,chr(9)
+                                                                       ,NULL)
+                                                               ,'"TABLE_NAME"')
+                                                         ,':"'
+                                                         ,NULL)
+                                                 ,'"'
+                                                 ,NULL))
+                              FROM pre_etl_json_document pejd
+                              JOIN pre_etl_json_lines pejl
+                                ON (pejl.document_name =
+                                   pejd.document_name AND
+                                   pejl.json_line LIKE
+                                   '%"TABLE_NAME"%:%')
+                             WHERE pejd.document_type =
+                                   'TABLE DOCUMENT'))
+      LOOP
+         BEGIN
+            pr_exec(i_exec => i_buf.stmt);
+         EXCEPTION
+            WHEN ex_table_not_exist THEN
+               NULL;
+         END;
+      END LOOP;
+   
+   END pr_remove_backups;
+END user_backup_restore_steps;
+/

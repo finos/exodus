@@ -1,0 +1,296 @@
+CREATE OR REPLACE PACKAGE BODY aud_generator IS
+
+   /*=================================================================================================
+       Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
+       
+       Developed by Christian Leigh
+
+       Copyright 2018 IHS Markit
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+     =================================================================================================  
+   */
+   
+   TYPE t_tab IS TABLE OF NUMBER INDEX BY VARCHAR2(50);
+   g_existing_tab t_tab;
+
+   FUNCTION get_alias(pvi_table_name IN VARCHAR2) RETURN VARCHAR2 IS
+      ln_chr_at     PLS_INTEGER;
+      lv_alias      VARCHAR2(10);
+      lv_table_name VARCHAR2(50);
+      l_temp_alias  VARCHAR2(50);
+      l_count       NUMBER;
+   BEGIN
+      lv_table_name := pvi_table_name;
+      ln_chr_at     := instr(lv_table_name, '_');
+   
+      WHILE ln_chr_at != 0
+      LOOP
+         lv_alias      := lv_alias ||
+                          substr(lv_table_name, ln_chr_at + 1, 1);
+         lv_table_name := substr(lv_table_name, ln_chr_at + 1);
+         ln_chr_at     := instr(lv_table_name, '_');
+      END LOOP;
+   
+      IF length(lv_alias) > 0
+      THEN
+         lv_alias := substr(pvi_table_name, 1, 1) || lv_alias;
+      ELSE
+         lv_alias := substr(pvi_table_name, 1, 3);
+      END IF;
+      --
+      l_temp_alias := lv_alias;
+      l_count      := 2;
+      IF g_existing_tab.EXISTS(l_temp_alias)
+      THEN
+         LOOP
+            l_temp_alias := lv_alias || '_' || to_char(l_count);
+            IF NOT g_existing_tab.EXISTS(l_temp_alias)
+            THEN
+               EXIT;
+            END IF;
+            l_count := l_count + 1;
+            IF l_count > 100
+            THEN
+               raise_application_error(-20000
+                                      ,'Possible infinite loop.');
+            END IF;
+         END LOOP;
+      END IF;
+      --
+      g_existing_tab(l_temp_alias) := 1; -- mark as existing.
+      --
+      RETURN l_temp_alias;
+   END get_alias;
+
+   -------------------------------------------------------------------------------
+
+   PROCEDURE log_stmt
+   (
+      pvi_owner      IN VARCHAR2
+     ,pvi_table_name IN VARCHAR2
+     ,pci_sql_text   IN CLOB
+   ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+   BEGIN
+      INSERT INTO aud_generator_log
+         (seq_no
+         ,owner
+         ,table_name
+         ,sql_text)
+      VALUES
+         (agl_seq_no_seq.nextval
+         ,pvi_owner
+         ,pvi_table_name
+         ,pci_sql_text);
+      COMMIT;
+   END log_stmt;
+   -------------------------------------------------------------------------------
+
+   PROCEDURE deploy_objs IS
+   BEGIN
+      FOR agl_rec IN (SELECT agl.rowid agl_rowid
+                            ,agl.sql_text
+                        FROM aud_generator_log agl
+                       WHERE agl.processed_ts IS NULL
+                       ORDER BY agl.seq_no)
+      LOOP
+         -- Remove these if you need to debug.
+         -- dbms_output.put_line(' ');
+         -- dbms_output.put_line('*****************************************************************');
+         -- dbms_output.put_line(agl_rec.sql_text);
+         -- dbms_output.put_line('*****************************************************************');
+         EXECUTE IMMEDIATE agl_rec.sql_text;
+      
+         UPDATE aud_generator_log
+            SET processed_ts = systimestamp
+          WHERE ROWID = agl_rec.agl_rowid;
+      
+         COMMIT;
+      END LOOP;
+   
+   END deploy_objs;
+   -------------------------------------------------------------------------------
+
+   PROCEDURE create_audit_tab
+   (
+      pvi_owner      IN VARCHAR2
+     ,pvi_table_name IN VARCHAR2
+   ) IS
+   
+      CURSOR tab_cols_cur IS
+         SELECT tc.table_name
+               ,column_name
+               ,lower(tc.column_name) || ' ' || CASE
+                   WHEN data_type_owner IS NOT NULL THEN
+                    data_type_owner || '.' || data_type
+                   WHEN data_type = 'NUMBER' THEN
+                    data_type || '(' || to_char(data_length) || ',' ||
+                    to_char(nvl(data_scale, 0)) || ')'
+                   WHEN data_type IN ('VARCHAR2', 'RAW') THEN
+                    data_type || '(' || to_char(data_length) || ')'
+                   ELSE
+                    data_type
+                END || CASE --Add a comma for all but the last column
+                   WHEN COUNT(*) over() = row_number()
+                    over(ORDER BY tc.table_name, column_id) THEN
+                    ')'
+                   ELSE
+                    ','
+                END new_column
+           FROM dba_tab_cols tc
+          WHERE tc.owner = pvi_owner
+            AND tc.table_name = pvi_table_name
+            AND tc.column_id IS NOT NULL;
+   
+      lc_stmt CLOB;
+   
+   BEGIN
+      lc_stmt := 'CREATE TABLE AUD_' || substr(pvi_table_name, 1, 26) || ' (' ||
+                 'aud_id                      RAW(16),
+                  aud_transaction_id          VARCHAR2(50),
+                  aud_changed_date_time       DATE,
+                  aud_changed_by_username     VARCHAR2(240),
+                  aud_changed_rowid           ROWID,
+                  aud_change_type             CHAR(1),';
+   
+      FOR tab_cols_rec IN tab_cols_cur
+      LOOP
+         lc_stmt := lc_stmt || chr(10) || '                  ' ||
+                    tab_cols_rec.new_column;
+      END LOOP;
+      --
+      log_stmt(pvi_owner, pvi_table_name, lc_stmt);
+   
+   END create_audit_tab;
+   -------------------------------------------------------------------------------
+
+   PROCEDURE create_audit_trg
+   (
+      pvi_owner      IN VARCHAR2
+     ,pvi_table_name IN VARCHAR2
+   ) IS
+      CURSOR tab_cols_cur IS
+         SELECT tc.table_name
+               ,lower(tc.column_name || CASE --Add a comma for all but the last column
+                         WHEN COUNT(*) over() = row_number()
+                          over(ORDER BY tc.table_name, column_id) THEN
+                          ')'
+                         ELSE
+                          ','
+                      END) column_name
+               ,tc.column_name AS column_name_no_frills
+           FROM dba_tab_cols tc
+          WHERE tc.owner = pvi_owner
+            AND tc.table_name = pvi_table_name
+            AND tc.column_id IS NOT NULL;
+      lc_stmt  CLOB;
+      l_add_or VARCHAR2(100);
+   BEGIN
+   -- NoFormat Start 
+   lc_stmt := 'CREATE OR REPLACE TRIGGER ' ||
+              get_alias(pvi_table_name) || '_trg' || '  AFTER INSERT OR UPDATE OR DELETE ON ' || pvi_owner || '.' || pvi_table_name ||
+              q'[ FOR EACH ROW
+DECLARE
+   v_change_type     VARCHAR2(1)
+                   := CASE
+      WHEN INSERTING
+         THEN 'I'
+      WHEN UPDATING
+         THEN 'U'
+      ELSE 'D'
+   END;
+   v_changed_rowid   ROWID
+                              := CASE
+      WHEN INSERTING
+         THEN :NEW.ROWID
+      ELSE :OLD.ROWID
+   END;
+BEGIN
+   IF v_change_type = 'I'
+   OR v_change_type = 'D'
+   OR (    v_change_type = 'U'
+       AND ( ]';
+                                                 -- NoFormat End 
+      l_add_or := '             ';
+      FOR tab_cols_rec IN tab_cols_cur
+      LOOP
+         lc_stmt  := lc_stmt || chr(10) || l_add_or || ':old.' ||
+                     tab_cols_rec.column_name_no_frills ||
+                     ' != :new.' ||
+                     tab_cols_rec.column_name_no_frills;
+         l_add_or := '          OR ';
+      
+      END LOOP;
+      lc_stmt := lc_stmt || chr(10) || '       )' || chr(10) ||
+                 '      ) THEN ' || chr(10);
+                                                            -- NoFormat Start 
+                                                           lc_stmt := lc_stmt ||'      INSERT INTO AUD_' || substr(pvi_table_name, 1, 26) ||
+                                                                                q'[             (aud_id
+,aud_transaction_id
+,aud_changed_date_time
+,aud_changed_by_username
+,aud_changed_rowid
+,aud_change_type, ]';
+                                                                         -- NoFormat End                                
+   
+      FOR tab_cols_rec IN tab_cols_cur
+      LOOP
+         lc_stmt := lc_stmt || chr(10) || tab_cols_rec.column_name;
+      END LOOP;
+   
+      lc_stmt := lc_stmt || chr(10) || ' VALUES (SYS_GUID()
+               ,dbms_transaction.local_transaction_id
+               ,SYSDATE
+               ,USER
+               ,v_changed_rowid
+               ,v_change_type,' || chr(10);
+   
+      FOR tab_cols_rec IN tab_cols_cur
+      LOOP
+         lc_stmt := lc_stmt || ':OLD.' || tab_cols_rec.column_name ||
+                    chr(10);
+      END LOOP;
+      lc_stmt := lc_stmt || '; ' || chr(10) || '   END IF;' ||
+                 chr(10) || 'END;';
+      log_stmt(pvi_owner, pvi_table_name, lc_stmt);
+   END create_audit_trg;
+   -------------------------------------------------------------------------------
+
+   PROCEDURE create_audit_objs
+   (
+      pvi_only_triggers_yn IN VARCHAR2 DEFAULT 'N'
+     ,pvi_owner            IN VARCHAR
+     ,pti_table_names      IN table_name_tab_typ
+   ) IS
+   BEGIN
+   
+      FOR i IN 1 .. pti_table_names.COUNT
+      LOOP
+         IF nvl(pvi_only_triggers_yn, 'N') = 'N'
+         THEN
+            create_audit_tab(pvi_owner      => pvi_owner
+                            ,pvi_table_name => pti_table_names(i));
+         END IF;
+         create_audit_trg(pvi_owner      => pvi_owner
+                         ,pvi_table_name => pti_table_names(i));
+      
+      END LOOP;
+   
+      deploy_objs;
+   
+   END create_audit_objs;
+
+END aud_generator;
+/

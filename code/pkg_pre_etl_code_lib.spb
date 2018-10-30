@@ -1,0 +1,399 @@
+CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_code_lib IS
+
+   /*=================================================================================================
+       Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
+       
+       Developed by Christian Leigh
+
+       Copyright 2018 IHS Markit
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+     =================================================================================================  
+   */
+
+   PROCEDURE pr_code_comment_matches_lib_yn
+   (
+      i_rowid    IN ROWID
+     ,o_match_yn OUT VARCHAR2
+     ,o_hash_vc  OUT VARCHAR2
+   ) IS
+      l_clob CLOB;
+      l_hash RAW(16);
+   BEGIN
+      o_match_yn := NULL;
+      --
+      BEGIN
+         SELECT pec.comments
+           INTO l_clob
+           FROM pre_etl_comments pec
+          WHERE pec.rowid = i_rowid;
+      EXCEPTION
+         WHEN no_data_found THEN
+            NULL;
+      END;
+      --
+      IF l_clob IS NOT NULL
+      THEN
+         BEGIN
+            SELECT pemcl.snippet_hash
+              INTO l_hash
+              FROM pre_etl_migration_code_lib pemcl
+             WHERE pemcl.snippet_hash =
+                   pkg_pre_etl_tools.fn_get_hash_for_clob(i_clob => l_clob);
+         EXCEPTION
+            WHEN no_data_found THEN
+               o_match_yn := 'N';
+               o_hash_vc  := NULL;
+         END;
+         IF o_match_yn IS NULL
+         THEN
+            o_match_yn := 'Y';
+            o_hash_vc  := l_hash;
+         END IF;
+      ELSE
+         o_match_yn := 'N';
+         o_hash_vc  := NULL;
+      END IF;
+   END pr_code_comment_matches_lib_yn;
+
+   ----------------------------------------------------------------------------   
+
+   PROCEDURE pr_code_comment_matches_lib_yn
+   (
+      i_code_comment IN VARCHAR2
+     ,o_match_yn     OUT VARCHAR2
+     ,o_hash_vc      OUT VARCHAR2
+   ) IS
+      l_hash RAW(16);
+   BEGIN
+      IF i_code_comment IS NOT NULL
+      THEN
+         BEGIN
+            SELECT pemcl.snippet_hash
+              INTO l_hash
+              FROM pre_etl_migration_code_lib pemcl
+             WHERE pemcl.snippet_hash =
+                   pkg_pre_etl_tools.fn_get_hash_for_clob(i_clob => i_code_comment);
+         EXCEPTION
+            WHEN no_data_found THEN
+               o_match_yn := 'N';
+               o_hash_vc  := NULL;
+         END;
+         IF o_match_yn IS NULL
+         THEN
+            o_match_yn := 'Y';
+            o_hash_vc  := l_hash;
+         END IF;
+      ELSE
+         o_match_yn := 'N';
+         o_hash_vc  := NULL;
+      END IF;
+   END pr_code_comment_matches_lib_yn;
+
+   ----------------------------------------------------------------------------   
+   PROCEDURE pr_dbms_output_code_comment
+   (
+      i_document        IN VARCHAR2
+     ,i_line_number     IN NUMBER
+     ,i_map_rules_group IN VARCHAR2 DEFAULT NULL
+     ,i_context         IN VARCHAR2 DEFAULT NULL
+   ) IS
+      l_map_rules_group pre_etl_mr_group.mr_group%TYPE;
+      l_document_name   pre_etl_json_document.document_name%TYPE;
+      l_last_mr_group   pre_etl_mr_group.mr_group%TYPE;
+      l_context_name    pre_etl_run_contexts.context_name%TYPE;
+      l_output_line     VARCHAR2(32767);
+   BEGIN
+      IF i_map_rules_group IS NOT NULL
+      THEN
+         BEGIN
+            SELECT pemg.mr_group
+              INTO l_map_rules_group
+              FROM pre_etl_mr_group pemg
+             WHERE upper(pemg.mr_group) = upper(i_map_rules_group);
+         EXCEPTION
+            WHEN no_data_found THEN
+               raise_application_error(-20000
+                                      ,'Unknown Map/Rules Group : ' ||
+                                       i_map_rules_group);
+         END;
+      END IF;
+      --
+      IF i_document IS NULL
+      THEN
+         raise_application_error(-20000, 'No document specified.');
+      ELSE
+         BEGIN
+            SELECT pejd.document_name
+              INTO l_document_name
+              FROM pre_etl_json_document pejd
+            
+             WHERE upper(pejd.document_name) = upper(i_document);
+         EXCEPTION
+            WHEN no_data_found THEN
+               raise_application_error(-20000
+                                      ,'Unknown document : ' ||
+                                       i_document);
+         END;
+      END IF;
+      --
+      IF i_context IS NOT NULL
+      THEN
+         BEGIN
+            SELECT perc.context_name
+              INTO l_context_name
+              FROM pre_etl_run_contexts perc
+             WHERE upper(perc.context_name) = upper(i_context);
+         EXCEPTION
+            WHEN no_data_found THEN
+               raise_application_error(-20000
+                                      ,'Unknown Context : ' ||
+                                       i_context);
+         END;
+      END IF;
+      --
+      dbms_output.put_line('Showing code comments for Map/Rules Group : ' ||
+                           nvl(upper(i_map_rules_group), 'ALL'));
+      IF l_context_name IS NOT NULL
+      THEN
+         dbms_output.put_line('         Applying Conversion for Context  : ' ||
+                              l_context_name);
+      END IF;
+      dbms_output.put_line('                          Document        : ' ||
+                           upper(i_document));
+      dbms_output.put_line('                          Line Number     : ' ||
+                           upper(i_line_number));
+      dbms_output.put_line(' ');
+      dbms_output.put_line(' ');
+      --
+      FOR i_buf IN (SELECT pec.*
+                      FROM pre_etl_comments pec
+                      JOIN pre_etl_related_json_lines perjl
+                        ON (perjl.document_name = l_document_name AND
+                           perjl.mr_group = pec.mr_group AND
+                           perjl.relationship_group_id =
+                           pec.relationship_group_id)
+                     WHERE pec.mr_group =
+                           nvl(l_map_rules_group, pec.mr_group)
+                       AND perjl.line_number = i_line_number
+                     ORDER BY pec.mr_group
+                             ,pec.comment_type)
+      LOOP
+         IF l_last_mr_group IS NULL
+            OR l_last_mr_group != i_buf.mr_group
+         THEN
+            l_output_line := 'Map Rules Group : ' || i_buf.mr_group;
+            dbms_output.put_line(lpad('*'
+                                     ,length(l_output_line)
+                                     ,'*'));
+            dbms_output.put_line(l_output_line);
+            dbms_output.put_line(lpad('*'
+                                     ,length(l_output_line)
+                                     ,'*'));
+            dbms_output.put_line(' ');
+            l_last_mr_group := i_buf.mr_group;
+         END IF;
+         --
+         l_output_line := '(' || i_buf.comment_type || ')   ' ||
+                          CASE i_buf.comment_type
+                             WHEN 'C' THEN
+                              'General Comment'
+                             WHEN 'Q' THEN
+                              'Question'
+                             WHEN 'T' THEN
+                              'Translation Comment'
+                             WHEN 'L' THEN
+                              'Lookup Action/Comment'
+                             WHEN 'F' THEN
+                              'Function Action/Comment'
+                             WHEN 'A' THEN
+                              'Array Action/Comment'
+                             WHEN 'D' THEN
+                              'Capture Dictionary Information'
+                          END;
+         dbms_output.put_line(l_output_line);
+         dbms_output.put_line(lpad('=', length(l_output_line), '='));
+         l_output_line := CASE
+                             WHEN l_context_name IS NULL THEN
+                              i_buf.comments
+                             ELSE
+                              pkg_pre_etl_tools.fn_contextualize(i_subject => i_buf.comments
+                                                                ,i_context => l_context_name)
+                          END;
+         dbms_output.put_line(l_output_line);
+         dbms_output.put_line(' ');
+         dbms_output.put_line(' ');
+      END LOOP;
+   END pr_dbms_output_code_comment;
+
+   ----------------------------------------------------------------------------   
+
+   PROCEDURE pr_add_to_lib
+   (
+      i_library_name   IN VARCHAR2
+     ,i_snippet_name   IN VARCHAR2
+     ,i_snippet_desc   IN VARCHAR2
+     ,i_snippet_code   IN CLOB
+     ,i_overwrite_bool IN BOOLEAN DEFAULT FALSE
+   ) IS
+      l_dummy VARCHAR2(1);
+   BEGIN
+      IF i_library_name IS NOT NULL
+      THEN
+         BEGIN
+            SELECT NULL
+              INTO l_dummy
+              FROM pre_etl_migration_libs peml
+             WHERE peml.library_name = i_library_name;
+         EXCEPTION
+            WHEN no_data_found THEN
+               raise_application_error(-20000
+                                      ,'Unknown library name : ' ||
+                                       i_library_name);
+         END;
+      END IF;
+      --
+      WHILE TRUE
+      LOOP
+         BEGIN
+            INSERT INTO pre_etl_migration_code_lib
+               (library_name
+               ,snippet_name
+               ,snippet_desc
+               ,snippet_code
+               ,snippet_hash
+               ,last_changed)
+            VALUES
+               (i_library_name
+               ,i_snippet_name
+               ,i_snippet_desc
+               ,i_snippet_code
+               ,(CASE WHEN i_snippet_code IS NULL THEN NULL ELSE
+                 pkg_pre_etl_tools.fn_get_hash_for_clob(i_clob => i_snippet_code) END)
+               ,systimestamp);
+            COMMIT;
+            EXIT;
+         EXCEPTION
+            WHEN dup_val_on_index THEN
+               IF i_overwrite_bool
+               THEN
+                  DELETE FROM pre_etl_migration_code_lib
+                   WHERE library_name = i_library_name
+                     AND snippet_name = i_snippet_name;
+                  IF SQL%ROWCOUNT = 0
+                  THEN
+                     DELETE FROM pre_etl_migration_code_lib
+                      WHERE snippet_hash =
+                            pkg_pre_etl_tools.fn_get_hash_for_clob(i_clob => i_snippet_code);
+                  END IF;
+                  COMMIT;
+               ELSE
+                  RAISE;
+               END IF;
+         END;
+      END LOOP;
+   END pr_add_to_lib;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_update_lib
+   (
+      i_snippet_hash IN VARCHAR2
+     ,i_snippet_code IN CLOB
+     ,o_library_name OUT VARCHAR2
+   ) IS
+   BEGIN
+      UPDATE pre_etl_migration_code_lib pemcl
+         SET pemcl.snippet_code = i_snippet_code
+            ,pemcl.snippet_hash = pkg_pre_etl_tools.fn_get_hash_for_clob(i_clob => i_snippet_code)
+       WHERE pemcl.snippet_hash = i_snippet_hash
+      RETURNING pemcl.library_name INTO o_library_name;
+      COMMIT;
+   END pr_update_lib;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_delete_from_lib(i_snippet_hash IN VARCHAR2) IS
+   BEGIN
+      DELETE FROM pre_etl_migration_code_lib pemcl
+       WHERE pemcl.snippet_hash = i_snippet_hash;
+      COMMIT;
+   END pr_delete_from_lib;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_add_to_clipboard(i_snippet_code IN VARCHAR2) IS
+      l_dummy           VARCHAR2(1);
+      l_exists_lib_bool BOOLEAN := FALSE;
+      l_clip_count      NUMBER;
+      l_match_yn        VARCHAR2(1);
+      l_hash_vc         VARCHAR2(32);
+   BEGIN
+      BEGIN
+         SELECT NULL
+           INTO l_dummy
+           FROM pre_etl_migration_libs peml
+          WHERE peml.library_name = 'CLIPBOARD';
+         l_exists_lib_bool := TRUE;
+      EXCEPTION
+         WHEN no_data_found THEN
+            l_exists_lib_bool := FALSE;
+      END;
+      --
+      IF NOT l_exists_lib_bool
+      THEN
+         INSERT INTO pre_etl_migration_libs
+            (library_name
+            ,library_desc)
+         VALUES
+            ('CLIPBOARD'
+            ,'Temporary Library Items.');
+      END IF;
+      --
+      pr_code_comment_matches_lib_yn(i_code_comment => i_snippet_code
+                                    ,o_match_yn     => l_match_yn
+                                    ,o_hash_vc      => l_hash_vc);
+      IF l_match_yn = 'Y'
+      THEN
+         DELETE FROM pre_etl_migration_code_lib pemcl
+          WHERE pemcl.snippet_hash = hextoraw(l_hash_vc)
+            AND pemcl.library_name = 'CLIPBOARD';
+         IF SQL%ROWCOUNT = 0
+         THEN
+            ROLLBACK;
+            raise_application_error(-20000
+                                   ,'The snippet being added to the clipboard exists elsewhere in the library.');
+         END IF;
+      END IF;
+      --
+      SELECT nvl(MAX(to_number(ltrim(pemcl.snippet_name
+                                    ,'Clip Snippet ')))
+                ,0)
+        INTO l_clip_count
+        FROM pre_etl_migration_code_lib pemcl
+       WHERE pemcl.library_name = 'CLIPBOARD';
+   
+      pr_add_to_lib(i_library_name => 'CLIPBOARD'
+                   ,i_snippet_name => 'Clip Snippet ' ||
+                                      to_char(l_clip_count + 1
+                                             ,'00000')
+                   ,i_snippet_desc => 'Clipboard Added : ' || chr(10) ||
+                                      to_char(systimestamp
+                                             ,'DD-MON-YY HH24:MI:SS')
+                   ,i_snippet_code => i_snippet_code);
+      COMMIT;
+   END pr_add_to_clipboard;
+
+END pkg_pre_etl_code_lib;
+/

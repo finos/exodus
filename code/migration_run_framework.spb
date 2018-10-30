@@ -1,0 +1,3262 @@
+CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
+
+   /*=================================================================================================
+       Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
+       
+       Developed by Christian Leigh
+
+       Copyright 2018 IHS Markit
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+     =================================================================================================  
+   */
+
+   /* Handy for monitoring manually :-
+   (AS SYS) : select * from GV_$GLOBALCONTEXT order by 2
+   */
+
+   FUNCTION fn_is_valid_job_class(i_job_class_name IN VARCHAR2)
+      RETURN BOOLEAN IS
+      l_dummy VARCHAR2(1);
+   BEGIN
+      IF i_job_class_name = 'FIXED INSTANCE'
+      THEN
+         RETURN TRUE;
+      ELSE
+         SELECT NULL
+           INTO l_dummy
+           FROM dba_scheduler_job_classes dsjc
+          WHERE dsjc.job_class_name = i_job_class_name;
+         RETURN TRUE;
+      END IF;
+   EXCEPTION
+      WHEN no_data_found THEN
+         RETURN FALSE;
+   END fn_is_valid_job_class;
+
+   --------------------------------------------------------------------------------------------------------
+   FUNCTION fn_get_param
+   (
+      i_migration_group IN VARCHAR2
+     ,i_param_name      IN VARCHAR2
+   ) RETURN VARCHAR2 IS
+      CURSOR cur_oep
+      (
+         c_migration_group IN VARCHAR2
+        ,c_param_name      IN VARCHAR2
+      ) IS
+         SELECT param_value
+           FROM on_etl_params oep
+          WHERE oep.migration_group = c_migration_group
+            AND oep.param_name = c_param_name;
+      --
+      cur_oep_buf cur_oep%ROWTYPE;
+      --
+      l_migration_group pre_etl_migration_groups.group_name%TYPE := i_migration_group;
+   
+   BEGIN
+      IF l_migration_group IS NULL
+      THEN
+         l_migration_group := 'INITIAL';
+         pr_log(i_log_type  => fn_warning
+               ,i_log_entry => 'There is no CONTEXT setup for the migration group (using INITIAL instead).  This could be because some part of the framework is being run standalone.');
+      END IF;
+      --
+      OPEN cur_oep(c_migration_group => l_migration_group
+                  ,c_param_name      => i_param_name);
+      FETCH cur_oep
+         INTO cur_oep_buf;
+      IF cur_oep%NOTFOUND
+      THEN
+         CLOSE cur_oep;
+         raise_application_error(-20000
+                                ,'migration_run_framework : fn_get_param : Param "' ||
+                                 i_param_name || '" not found.');
+      END IF;
+      CLOSE cur_oep;
+      --
+      RETURN cur_oep_buf.param_value;
+   END fn_get_param;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_lf(i_quantity IN NUMBER DEFAULT 1) RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN lpad(chr(10), i_quantity, chr(10));
+   END fn_lf;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_dev RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'DEV';
+   END fn_dev;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_man RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MAN';
+   END fn_man;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_info RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'INFO';
+   END fn_info;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_error RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'ERROR';
+   END fn_error;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_warning RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'WARNING';
+   END fn_warning;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_status RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'STATUS';
+   END fn_status;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_failed RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN '##FAILED##';
+   END fn_failed;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_completed RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN '##COMPLETED##';
+   END fn_completed;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_master_job RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIGRATION_MASTER_JOB';
+   END fn_master_job;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_monitor_job RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIGRATION_MONITOR_JOB';
+   END fn_monitor_job;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_monitor_job_alive RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIGRATION_MONITOR_JOB_ALIVE';
+   END fn_ctx_monitor_job_alive;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_child_job RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN '%' || 'MIG/_TASK/_' || '%';
+   END fn_child_job;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_migration_start_time RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_MIGRATION_START_TIME';
+   END fn_ctx_migration_start_time;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_migration_running RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_MIGRATION_RUNNING';
+   END fn_ctx_migration_running;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_migration_batch RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_MIGRATION_BATCH';
+   END fn_ctx_migration_batch;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_migration_group RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_MIGRATION_GROUP';
+   END fn_ctx_migration_group;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_run_context RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_RUN_CONTEXT';
+   END fn_ctx_run_context;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_start_at_step RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_START_AT_STEP';
+   END fn_ctx_start_at_step;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_start_at_thread RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_START_AT_THREAD';
+   END fn_ctx_start_at_thread;
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_stop_at_step RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_STOP_AT_STEP';
+   END fn_ctx_stop_at_step;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_concurrency RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_CONCURRENCY';
+   END fn_ctx_concurrency;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_rows_per_thread RETURN VARCHAR2
+      PARALLEL_ENABLE result_cache IS
+   BEGIN
+      RETURN 'MGCTX_ROWS_PER_THREAD';
+   END fn_ctx_rows_per_thread;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_step_name RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_STEP_NAME';
+   END fn_ctx_step_name;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_fault_detected RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_FAULT_DETECTED';
+   END fn_ctx_fault_detected;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_kill_detected RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_KILL_DETECTED';
+   END fn_ctx_kill_detected;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_task_list RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_TASK_LIST';
+   END fn_ctx_task_list;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_job_list RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_JOB_LIST';
+   END fn_ctx_job_list;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_lock_handle RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_LOCK_HANDLE';
+   END fn_ctx_lock_handle;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_force_email RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_FORCE_EMAIL';
+   END fn_ctx_force_email;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_job_class RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MGCTX_JOB_CLASS';
+   END fn_ctx_job_class;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_man_email RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_EMAIL_RECIPIENTS_MAN';
+   END fn_param_const_man_email;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_dev_email RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_EMAIL_RECIPIENTS_DEV';
+   END fn_param_const_dev_email;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_man_cycle RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_UPDATE_CYCLE_MINS_MAN';
+   END fn_param_const_man_cycle;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_dev_cycle RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_UPDATE_CYCLE_MINS_DEV';
+   END fn_param_const_dev_cycle;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_sender RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_STATUS_EMAIL_SENDER';
+   END fn_param_const_sender;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_const_email_host RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_SMTP_HOST';
+   END fn_param_const_email_host;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_param_consumer_group RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'MIG_ETL_CONSUMER_GROUP';
+   END fn_param_consumer_group;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_max_lines RETURN NUMBER result_cache IS
+   BEGIN
+      RETURN 1000;
+   END fn_max_lines;
+
+   --------------------------------------------------------------------------------------------------------
+   FUNCTION fn_no_parallel_for_session_txt RETURN VARCHAR2 result_cache IS
+   BEGIN
+      -- NoFormat Start 
+      RETURN q'[ EXECUTE IMMEDIATE 'alter session disable parallel query'; ]' || fn_lf ||
+             q'[ EXECUTE IMMEDIATE 'alter session disable parallel dml'; ]' || fn_lf || 
+             q'[ EXECUTE IMMEDIATE 'alter session disable parallel ddl'; ]' || fn_lf || 
+             q'[ EXECUTE IMMEDIATE 'alter session set cursor_sharing = FORCE'; ]' || fn_lf || 
+             q'[ EXECUTE IMMEDIATE 'alter session set "_optimizer_unnest_scalar_sq"= FALSE'; ]'|| fn_lf ||
+             q'[ EXECUTE IMMEDIATE 'alter session set NLS_TIMESTAMP_FORMAT = ''DD-MON-YYYY HH24.MI.SS.FF6'''; ]';
+      -- NoFormat End              
+   END fn_no_parallel_for_session_txt;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_is_valid_migration_group(i_migration_group IN VARCHAR2)
+      RETURN BOOLEAN IS
+      l_dummy VARCHAR2(1);
+   BEGIN
+      SELECT NULL
+        INTO l_dummy
+        FROM pre_etl_migration_groups pemg
+       WHERE pemg.group_name = i_migration_group;
+      --
+      RETURN TRUE;
+   EXCEPTION
+      WHEN no_data_found THEN
+         RETURN FALSE;
+   END fn_is_valid_migration_group;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_is_valid_context(i_context IN VARCHAR2) RETURN BOOLEAN IS
+      l_dummy VARCHAR2(1);
+   BEGIN
+      SELECT NULL
+        INTO l_dummy
+        FROM pre_etl_run_contexts perc
+       WHERE perc.context_name = i_context;
+      --
+      RETURN TRUE;
+   EXCEPTION
+      WHEN no_data_found THEN
+         RETURN FALSE;
+   END fn_is_valid_context;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_get_oed_count
+   (
+      i_schema_name IN VARCHAR2
+     ,i_table_name  IN VARCHAR2
+   ) RETURN NUMBER result_cache IS
+      l_return      NUMBER;
+      l_schema_name VARCHAR2(30) := pkg_pre_etl_tools.fn_contextualize(i_subject => i_schema_name
+                                                                      ,i_context => pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_run_context));
+   BEGIN
+   
+      SELECT COUNT(*)
+        INTO l_return
+        FROM on_etl_driver oed
+       WHERE oed.source_schema = l_schema_name
+         AND oed.source_table_name = i_table_name;
+      --
+      RETURN l_return;
+   END fn_get_oed_count;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_get_global_name RETURN VARCHAR2 IS
+      l_return VARCHAR(500);
+   BEGIN
+      SELECT global_name INTO l_return FROM global_name;
+      --
+      RETURN l_return;
+   END fn_get_global_name;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_get_latest_log_ts
+   (
+      i_batch           IN NUMBER
+     ,i_migration_group IN VARCHAR2
+   ) RETURN TIMESTAMP result_cache IS
+      l_return TIMESTAMP;
+   BEGIN
+      SELECT MAX(oel.log_ts)
+        INTO l_return
+        FROM on_etl_log oel
+       WHERE oel.log_batch = i_batch
+         AND oel.log_migration_group = i_migration_group;
+      --
+      RETURN nvl(l_return
+                ,to_timestamp('01-JAN-2000 00:00:00'
+                             ,'DD-MON-YYYY HH24:MI:SS'));
+   END fn_get_latest_log_ts;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_jobs_like_exists(i_job_name IN VARCHAR2) RETURN BOOLEAN IS
+      l_dummy VARCHAR2(1);
+   BEGIN
+      SELECT NULL
+        INTO l_dummy
+        FROM user_scheduler_jobs
+       WHERE job_name LIKE i_job_name ESCAPE '/'
+         AND rownum = 1;
+      RETURN TRUE;
+   EXCEPTION
+      WHEN no_data_found THEN
+         RETURN FALSE;
+   END fn_jobs_like_exists;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_is_threaded_mig
+   (
+      i_migration_group IN VARCHAR2
+     ,i_step            IN NUMBER
+   ) RETURN BOOLEAN IS
+      CURSOR cur_is_threded_mig
+      (
+         c_migration_group IN VARCHAR2
+        ,c_step            IN NUMBER
+      ) IS
+         SELECT *
+           FROM (SELECT 'TRUE' AS threaded_mig_step
+                   FROM pre_etl_migration_header pemh
+                   JOIN pre_etl_migration_src pems
+                     ON (pems.migration_group = pemh.migration_group AND
+                        pems.migration_name = pemh.migration_name AND
+                        pems.use_with_on_etl_driver_yn = 'Y')
+                  WHERE pemh.migration_group = c_migration_group
+                    AND pemh.header_type = 'M'
+                    AND pemh.order_of_exec = c_step
+                 UNION
+                 SELECT 'FALSE'
+                   FROM dual
+                  ORDER BY threaded_mig_step DESC)
+          WHERE rownum = 1;
+      cur_is_threded_mig_buf cur_is_threded_mig%ROWTYPE;
+   BEGIN
+      OPEN cur_is_threded_mig(c_migration_group => i_migration_group
+                             ,c_step            => i_step);
+      FETCH cur_is_threded_mig
+         INTO cur_is_threded_mig_buf;
+      CLOSE cur_is_threded_mig;
+      --
+      IF cur_is_threded_mig_buf.threaded_mig_step = 'TRUE'
+      THEN
+         RETURN TRUE;
+      ELSE
+         RETURN FALSE;
+      END IF;
+   END fn_is_threaded_mig;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_get_lock(i_lock_handle_ctx IN VARCHAR2) RETURN NUMBER IS
+      l_lock_status NUMBER;
+   BEGIN
+      -- Takes a user lock out.  Releases on EITHER a commit or a ROLLBACK or the owning USER specifically releasing it.
+      -- This is a blocking lock so we only exit here if we get the lock or there is a technical reason why we can't 
+      -- get it... for example we are not the owner of the lock name.
+      l_lock_status := dbms_lock.request(pkg_pre_etl_tools.fn_get_context_value(i_attr => i_lock_handle_ctx)
+                                        ,dbms_lock.x_mode
+                                        ,dbms_lock.maxwait
+                                        ,TRUE);
+      RETURN l_lock_status;
+   END fn_get_lock;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_release_lock(i_lock_handle_ctx IN VARCHAR2) RETURN NUMBER IS
+      l_lock_status NUMBER;
+   BEGIN
+      -- Releases the lock handle.
+      l_lock_status := dbms_lock.release(pkg_pre_etl_tools.fn_get_context_value(i_attr => i_lock_handle_ctx));
+      RETURN l_lock_status;
+   END fn_release_lock;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_register_parallel_task(i_task_name IN VARCHAR2) IS
+      l_register_task VARCHAR2(32) := '*' || upper(i_task_name) || '*';
+      l_tasks         VARCHAR2(32767);
+      l_lock_status   NUMBER;
+      l_dummy         NUMBER;
+   BEGIN
+      -- We mustn't meddle with the contents of the registered tasks context without guaranteeing 
+      -- that we're the only people fiddling with it.  Contexts have no inherent concurrency control of their own.
+      l_lock_status := fn_get_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      --
+      IF l_lock_status = 0
+      THEN
+         pr_log(i_log_type  => fn_info
+               ,i_log_entry => 'Attempting to register a Parallel Task : ' ||
+                               upper(i_task_name));
+         l_tasks := pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_task_list);
+         IF l_tasks IS NULL
+            OR instr(l_tasks, l_register_task) = 0
+         THEN
+            pkg_pre_etl_tools.pr_set_context(i_attr  => migration_run_framework.fn_ctx_task_list
+                                            ,i_value => l_tasks ||
+                                                        l_register_task);
+            pr_log(i_log_type  => fn_info
+                  ,i_log_entry => 'Successful register of a Parallel Task : ' ||
+                                  upper(i_task_name));
+         END IF;
+      ELSE
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_register_parallel_task : For ' ||
+                                 i_task_name ||
+                                 ' could not acquire lock.');
+      END IF;
+      --
+      l_lock_status := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      IF l_lock_status != 0
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_register_parallel_task : For ' ||
+                                 i_task_name ||
+                                 ' could not release lock.');
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         l_dummy := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+         RAISE;
+   END pr_register_parallel_task;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_deregister_parallel_task(i_task_name IN VARCHAR2) IS
+      l_deregister_task VARCHAR2(32) := '*' || upper(i_task_name) || '*';
+      l_tasks           VARCHAR2(32767);
+      l_lock_status     NUMBER;
+      l_dummy           NUMBER;
+   BEGIN
+      -- We mustn't meddle with the contents of the registered tasks context without guaranteeing 
+      -- that we're the only people fiddling with it.  Contexts have no inherent concurrency control of their own.    
+      l_lock_status := fn_get_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      --
+      IF l_lock_status = 0
+      THEN
+         l_tasks := pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_task_list);
+         pr_log(i_log_type  => fn_info
+               ,i_log_entry => 'Attempting to deregister a Parallel Task : ' ||
+                               upper(i_task_name));
+         IF l_tasks IS NULL
+            OR instr(l_tasks, l_deregister_task) = 0
+         THEN
+            raise_application_error(-20000
+                                   ,'migration_run_framework : pr_deregister_parallel_task : Could not find task to deregister :' ||
+                                    i_task_name);
+         ELSE
+            l_tasks := REPLACE(l_tasks, l_deregister_task, NULL);
+            pkg_pre_etl_tools.pr_set_context(i_attr  => migration_run_framework.fn_ctx_task_list
+                                            ,i_value => l_tasks);
+            pr_log(i_log_type  => fn_info
+                  ,i_log_entry => 'Successful deregister of a Parallel Task : ' ||
+                                  upper(i_task_name));
+         END IF;
+      ELSE
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_deregister_parallel_task : For ' ||
+                                 i_task_name ||
+                                 ' could not acquire lock.');
+      END IF;
+      --
+      l_lock_status := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      IF l_lock_status != 0
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_deregister_parallel_task : For ' ||
+                                 i_task_name ||
+                                 ' could not release lock.');
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         l_dummy := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+         RAISE;
+   END pr_deregister_parallel_task;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_register_managed_job(i_job_name IN VARCHAR2) IS
+      l_job             VARCHAR2(32) := '*' || upper(i_job_name) || '*';
+      l_registered_jobs VARCHAR2(32767);
+      l_lock_status     NUMBER;
+      l_dummy           NUMBER;
+   BEGIN
+      -- We mustn't meddle with the contents of the registered managed jobs context without guaranteeing 
+      -- that we're the only people fiddling with it.  Contexts have no inherent concurrency control of their own.    
+      l_lock_status := fn_get_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      --
+      IF l_lock_status = 0
+      THEN
+         pr_log(i_log_type  => fn_info
+               ,i_log_entry => 'Attempting to register a Managed Job : ' ||
+                               upper(i_job_name));
+         l_registered_jobs := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_list);
+         IF l_registered_jobs IS NULL
+            OR instr(l_registered_jobs, l_job) = 0
+         THEN
+            pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_job_list
+                                            ,i_value => l_registered_jobs ||
+                                                        l_job);
+            pr_log(i_log_type  => fn_info
+                  ,i_log_entry => 'Successful register of a Managed Job : ' ||
+                                  upper(i_job_name));
+         END IF;
+      ELSE
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_register_managed_job : For ' ||
+                                 i_job_name ||
+                                 ' could not acquire lock.');
+      END IF;
+      --
+      l_lock_status := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      IF l_lock_status != 0
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_register_managed_job : For ' ||
+                                 i_job_name ||
+                                 ' could not release lock.');
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         l_dummy := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+         RAISE;
+   END pr_register_managed_job;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_deregister_managed_job(i_job_name IN VARCHAR2) IS
+      l_job             VARCHAR2(32) := '*' || upper(i_job_name) || '*';
+      l_registered_jobs VARCHAR2(32767);
+      l_lock_status     NUMBER;
+      l_dummy           NUMBER;
+   BEGIN
+      -- We mustn't meddle with the contents of the registered managed jobs context without guaranteeing 
+      -- that we're the only people fiddling with it.  Contexts have no inherent concurrency control of their own.    
+      l_lock_status := fn_get_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      --
+      IF l_lock_status = 0
+      THEN
+         pr_log(i_log_type  => fn_info
+               ,i_log_entry => 'Attempting to deregister a Managed Job : ' ||
+                               upper(i_job_name));
+         l_registered_jobs := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_list);
+         IF l_registered_jobs IS NULL
+            OR instr(l_registered_jobs, l_job) = 0
+         THEN
+            raise_application_error(-20000
+                                   ,'migration_run_framework : pr_deregister_managed_job : Could not find job to deregister :' ||
+                                    i_job_name);
+         ELSE
+            l_registered_jobs := REPLACE(l_registered_jobs
+                                        ,l_job
+                                        ,NULL);
+            pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_job_list
+                                            ,i_value => l_registered_jobs);
+            pr_log(i_log_type  => fn_info
+                  ,i_log_entry => 'Successful deregister of a Managed Job : ' ||
+                                  upper(i_job_name));
+         END IF;
+      ELSE
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_deregister_managed_job : For ' ||
+                                 i_job_name ||
+                                 ' could not acquire lock.');
+      END IF;
+      --
+      l_lock_status := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+      IF l_lock_status != 0
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_deregister_managed_job : For ' ||
+                                 i_job_name ||
+                                 ' could not release lock.');
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         l_dummy := fn_release_lock(i_lock_handle_ctx => fn_ctx_lock_handle);
+         RAISE;
+   END pr_deregister_managed_job;
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_force_a_status_email IS
+   BEGIN
+      pr_log(i_log_type  => fn_info
+            ,i_log_entry => 'A status email was requested.');
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_force_email
+                                      ,i_value => 'TRUE');
+   END pr_force_a_status_email;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_start_managed_job
+   (
+      i_job_name IN VARCHAR2
+     ,i_job_sql  IN VARCHAR2
+   ) IS
+      l_job             VARCHAR2(32767);
+      l_instance_number NUMBER;
+   BEGIN
+      IF i_job_name = 'ALL'
+      THEN
+         raise_application_error(-20000
+                                ,'Cannot name the job as : ALL : This is a reserved job name.');
+      END IF;
+      --
+      IF substr(TRIM(REPLACE(REPLACE(i_job_sql, chr(10), ' ')
+                            ,chr(13)
+                            ,' '))
+               ,-1
+               ,1) != ';'
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework.pr_start_managed_job : i_job_sql should be terminated with a ; (semicolon)');
+      ELSE
+         l_job := 'BEGIN ' || i_job_sql || ' ' ||
+                  'migration_run_framework.pr_deregister_managed_job(i_job_name => ' ||
+                  chr(39) || upper(i_job_name) || chr(39) ||
+                  '); EXCEPTION WHEN OTHERS THEN migration_run_framework.pr_deregister_managed_job(i_job_name => ' ||
+                  chr(39) || upper(i_job_name) || chr(39) ||
+                  '); END;';
+      END IF;
+      -- Only completed (successfully or unsuccessfully) managed jobs will execute the final deregister.
+      --
+      pr_log(i_log_type  => fn_info
+            ,i_log_entry => 'Attempting to start a Managed Job : ' ||
+                            upper(i_job_name));
+      pr_register_managed_job(i_job_name => upper(i_job_name));
+      --
+      dbms_scheduler.create_job(job_name   => upper(i_job_name)
+                               ,job_class  => (CASE
+                                               pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_class)
+                                                 WHEN 'FIXED INSTANCE' THEN
+                                                  'DEFAULT_JOB_CLASS'
+                                                 ELSE
+                                                  pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_class)
+                                              END)
+                               ,job_type   => 'PLSQL_BLOCK'
+                               ,job_action => l_job
+                               ,enabled    => TRUE
+                               ,auto_drop  => TRUE);
+      IF pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_class) =
+         'FIXED INSTANCE'
+      THEN
+         SELECT instance_number
+           INTO l_instance_number
+           FROM v$instance;
+         dbms_scheduler.set_attribute(NAME      => upper(i_job_name)
+                                     ,attribute => 'INSTANCE_ID'
+                                     ,VALUE     => to_char(l_instance_number));
+      END IF;
+      pr_log(i_log_type          => fn_info
+            ,i_log_entry         => 'Successful attempt to start a Managed Job : ' ||
+                                    upper(i_job_name)
+            ,i_log_extended_info => l_job);
+   END pr_start_managed_job;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_wait_until_ended
+   (
+      i_job_name        IN VARCHAR2 DEFAULT 'ALL'
+     ,i_check_freq_secs IN NUMBER DEFAULT 10
+     ,i_timeout_secs    IN NUMBER DEFAULT 86400
+     ,o_status          OUT VARCHAR2
+   ) IS
+      l_time_running NUMBER := 0;
+   BEGIN
+      o_status := 'UNKNOWN';
+      WHILE l_time_running < i_timeout_secs
+      LOOP
+         IF upper(i_job_name) = 'ALL'
+            AND
+            pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_list) IS NULL
+         THEN
+            o_status := 'COMPLETE';
+            EXIT;
+         END IF;
+         --
+         IF upper(i_job_name) != 'ALL'
+            AND instr(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_list)
+                     ,'*' || upper(i_job_name) || '*') = 0
+         THEN
+            o_status := 'COMPLETE';
+            EXIT;
+         END IF;
+         --
+         dbms_lock.sleep(seconds => i_check_freq_secs);
+         l_time_running := l_time_running + i_check_freq_secs;
+      END LOOP;
+      --
+      IF l_time_running >= i_timeout_secs
+      THEN
+         o_status := 'TIMEDOUT';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         o_status := 'EXCEPTION';
+         RAISE;
+   END pr_wait_until_ended;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_set_consumer_group IS
+   BEGIN
+      dbms_resource_manager.switch_consumer_group_for_sess(session_id     => dbms_debug_jdwp.current_session_id
+                                                          ,session_serial => dbms_debug_jdwp.current_session_serial
+                                                          ,consumer_group => fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                                                         ,i_param_name      => fn_param_consumer_group));
+   END pr_set_consumer_group;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_teardown_contexts IS
+   BEGIN
+      pkg_pre_etl_tools.pr_destroy_context;
+   END pr_teardown_contexts;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_clear_instructions IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+   BEGIN
+      DELETE FROM on_etl_instruction;
+      COMMIT;
+   END pr_clear_instructions;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_send_mail
+   (
+      i_to_email   IN VARCHAR2
+     ,i_from_email IN VARCHAR2
+     ,i_subject    IN VARCHAR2
+     ,i_text_msg   IN VARCHAR2 DEFAULT NULL
+     ,i_html_msg   IN CLOB DEFAULT NULL
+     ,i_smtp_host  IN VARCHAR2
+     ,i_smtp_port  IN NUMBER DEFAULT 25
+   ) AS
+      v_mail_conn utl_smtp.connection;
+      v_boundary  VARCHAR2(50) := '----=*#abc1234321cba#*=';
+      --
+      --
+      PROCEDURE smtp_write_clob_data
+      (
+         mail_conn_in_out IN OUT utl_smtp.connection
+        ,msg_in           IN CLOB
+      ) IS
+         TYPE t_varchar2_32000 IS TABLE OF VARCHAR2(32000) INDEX BY BINARY_INTEGER;
+         --
+         v_varchar2_32000     t_varchar2_32000;
+         v_idx_varchar2_32000 PLS_INTEGER := 0;
+         v_pos                PLS_INTEGER := 1;
+         v_len                NUMBER;
+      BEGIN
+         WHILE TRUE
+         LOOP
+            v_varchar2_32000(v_idx_varchar2_32000) := substr(msg_in
+                                                            ,v_pos
+                                                            ,32000);
+            v_len := length(v_varchar2_32000(v_idx_varchar2_32000));
+         
+            IF v_len IS NULL
+               OR v_len < 32000
+            THEN
+               EXIT;
+            END IF;
+            v_idx_varchar2_32000 := v_idx_varchar2_32000 + 1;
+            v_pos                := v_pos + 32000;
+         END LOOP;
+         --
+         --
+         IF v_varchar2_32000.COUNT > 0
+         THEN
+            FOR i IN v_varchar2_32000.FIRST .. v_varchar2_32000.LAST
+            LOOP
+               utl_smtp.write_data(c    => mail_conn_in_out
+                                  ,data => v_varchar2_32000(i));
+            END LOOP;
+         END IF;
+      END smtp_write_clob_data;
+   
+   BEGIN
+      v_mail_conn := utl_smtp.open_connection(i_smtp_host
+                                             ,i_smtp_port);
+      utl_smtp.helo(v_mail_conn, i_smtp_host);
+      utl_smtp.mail(v_mail_conn, i_from_email);
+      utl_smtp.rcpt(v_mail_conn, i_to_email);
+   
+      utl_smtp.open_data(v_mail_conn);
+   
+      utl_smtp.write_data(v_mail_conn
+                         ,'Date: ' ||
+                          to_char(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') ||
+                          utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'To: ' || i_to_email || utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'From: ' || i_from_email || utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'Subject: ' || i_subject || utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'Reply-To: ' || i_from_email ||
+                          utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'MIME-Version: 1.0' || utl_tcp.crlf);
+      utl_smtp.write_data(v_mail_conn
+                         ,'Content-Type: multipart/alternative; boundary="' ||
+                          v_boundary || '"' || utl_tcp.crlf ||
+                          utl_tcp.crlf);
+   
+      IF i_text_msg IS NOT NULL
+      THEN
+         utl_smtp.write_data(v_mail_conn
+                            ,'--' || v_boundary || utl_tcp.crlf);
+         utl_smtp.write_data(v_mail_conn
+                            ,'Content-Type: text/plain; charset="iso-8859-1"' ||
+                             utl_tcp.crlf || utl_tcp.crlf);
+      
+         utl_smtp.write_data(c => v_mail_conn, data => i_text_msg);
+      
+         utl_smtp.write_data(v_mail_conn
+                            ,utl_tcp.crlf || utl_tcp.crlf);
+      END IF;
+   
+      IF i_html_msg IS NOT NULL
+      THEN
+         utl_smtp.write_data(v_mail_conn
+                            ,'--' || v_boundary || utl_tcp.crlf);
+         utl_smtp.write_data(v_mail_conn
+                            ,'Content-Type: text/html; charset="iso-8859-1"' ||
+                             utl_tcp.crlf || utl_tcp.crlf);
+      
+         smtp_write_clob_data(mail_conn_in_out => v_mail_conn
+                             ,msg_in           => i_html_msg);
+      
+         utl_smtp.write_data(v_mail_conn
+                            ,utl_tcp.crlf || utl_tcp.crlf);
+      END IF;
+   
+      utl_smtp.write_data(v_mail_conn
+                         ,'--' || v_boundary || '--' || utl_tcp.crlf);
+      utl_smtp.close_data(v_mail_conn);
+   
+      utl_smtp.quit(v_mail_conn);
+   EXCEPTION
+      WHEN OTHERS THEN
+         -- Close off resource.
+         utl_smtp.close_data(v_mail_conn);
+         utl_smtp.quit(v_mail_conn);
+         RAISE;
+   END pr_send_mail;
+
+   ----------------------------------------------------------------------------------------------------------------
+   PROCEDURE pr_email_status
+   (
+      i_subject IN VARCHAR2
+     ,i_body    IN CLOB DEFAULT NULL
+     ,i_mode    IN VARCHAR2
+   ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+   
+      v_to_list VARCHAR2(32000);
+      --
+   BEGIN
+      IF i_mode NOT IN (fn_dev, fn_man)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_email_status : Unrecognised email type.');
+      END IF;
+      v_to_list := fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                               ,i_param_name      => CASE i_mode
+                                                        WHEN fn_dev THEN
+                                                         fn_param_const_dev_email
+                                                        WHEN fn_man THEN
+                                                         fn_param_const_man_email
+                                                     END);
+   
+      --
+      IF v_to_list IS NOT NULL
+      THEN
+      
+         FOR i IN (SELECT regexp_substr(str
+                                       ,'[^' || delim || ']+'
+                                       ,1
+                                       ,rownum) field
+                     FROM (SELECT v_to_list str
+                                 ,',' delim
+                             FROM dual)
+                   CONNECT BY LEVEL <=
+                              regexp_count(str, '[^' || delim || ']+'))
+         
+         LOOP
+            BEGIN
+               pr_send_mail(i_to_email   => i.field
+                           ,i_from_email => fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                        ,i_param_name      => fn_param_const_sender)
+                           ,i_subject    => i_subject
+                           ,i_text_msg   => 'Migration Status Report (HTML message).'
+                           ,i_html_msg   => i_body
+                           ,i_smtp_host  => fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                        ,i_param_name      => fn_param_const_email_host));
+            EXCEPTION
+               WHEN OTHERS THEN
+                  pr_log(i_log_type           => fn_warning
+                        ,i_log_entry          => 'EMAIL NOT SENT TO ( ' ||
+                                                 i.field || ' ) : ' ||
+                                                 SQLERRM
+                        ,i_log_activity_group => 'Monitor');
+               
+            END;
+         END LOOP;
+         --
+      END IF;
+   
+      COMMIT;
+   EXCEPTION
+      WHEN OTHERS THEN
+         -- failure to send emails is not a reason to stop the process.
+         -- consume the exception and continue.
+         pr_log(i_log_type  => fn_warning
+               ,i_log_entry => 'EMAIL NOT SENT : ' || SQLERRM);
+      
+   END pr_email_status;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_replace
+   (
+      io_email_body         IN OUT CLOB
+     ,i_replace_placeholder IN VARCHAR2
+     ,i_replace_val         IN CLOB
+   ) IS
+      TYPE t_varchar2_32000 IS TABLE OF VARCHAR2(32000) INDEX BY BINARY_INTEGER;
+      v_varchar2_32000      t_varchar2_32000;
+      v_idx_varchar2_32000  PLS_INTEGER := 0;
+      v_pos                 PLS_INTEGER := 1;
+      v_replace_placeholder VARCHAR2(255);
+      v_len                 NUMBER;
+   BEGIN
+      -- If we're using a clob as the replace value, its possible that it might be
+      -- over 32k in length... We need to split this appropriately as a replacement
+      -- value of over 32k will throw :-
+      -- "ORA-22828: input pattern or replacement parameters exceed 32K size limit"
+      WHILE TRUE
+      LOOP
+         v_varchar2_32000(v_idx_varchar2_32000) := substr(i_replace_val
+                                                         ,v_pos
+                                                         ,31000);
+         v_len := length(v_varchar2_32000(v_idx_varchar2_32000));
+         IF v_len IS NULL
+            OR v_len < 31000
+         THEN
+            EXIT;
+         END IF;
+         --
+         -- Add on to the end of the line a replacement tag (should be <xyz_?> where xyz is the i_replace_placeholder
+         -- and ? is a number)
+         v_varchar2_32000(v_idx_varchar2_32000) := v_varchar2_32000(v_idx_varchar2_32000) ||
+                                                   substr(i_replace_placeholder
+                                                         ,1
+                                                         ,length(i_replace_placeholder) - 1) || '_' ||
+                                                   TRIM(to_char(v_idx_varchar2_32000 + 1)) ||
+                                                   substr(i_replace_placeholder
+                                                         ,length(i_replace_placeholder)
+                                                         ,1);
+         v_idx_varchar2_32000 := v_idx_varchar2_32000 + 1;
+         v_pos := v_pos + 31000;
+      END LOOP;
+   
+      IF v_varchar2_32000.COUNT > 0
+      THEN
+         FOR i IN v_varchar2_32000.FIRST .. v_varchar2_32000.LAST
+         LOOP
+            IF i = 0
+            THEN
+               v_replace_placeholder := i_replace_placeholder;
+            ELSE
+               v_replace_placeholder := substr(i_replace_placeholder
+                                              ,1
+                                              ,length(i_replace_placeholder) - 1) || '_' ||
+                                        TRIM(to_char(i)) ||
+                                        substr(i_replace_placeholder
+                                              ,length(i_replace_placeholder)
+                                              ,1);
+            END IF;
+            io_email_body := REPLACE(io_email_body
+                                    ,v_replace_placeholder
+                                    ,v_varchar2_32000(i));
+         END LOOP;
+      END IF;
+   
+   END pr_replace;
+   --
+   --
+   --
+   PROCEDURE pr_replace
+   (
+      io_email_body         IN OUT CLOB
+     ,i_replace_placeholder IN VARCHAR2
+     ,i_replace_val         IN VARCHAR2
+   ) IS
+   BEGIN
+      io_email_body := REPLACE(io_email_body
+                              ,i_replace_placeholder
+                              ,i_replace_val);
+   END pr_replace;
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_setup_alert_email_text(o_text_body OUT CLOB) IS
+      l_text_body VARCHAR2(32000);
+      PROCEDURE pr_add_to_text(i_text IN VARCHAR2) IS
+      BEGIN
+         l_text_body := l_text_body || nvl(i_text, ' ') || fn_lf;
+      END pr_add_to_text;
+   BEGIN
+      pr_add_to_text(i_text => '<html><body><pre>');
+      pr_add_to_text(i_text => '<MESSAGE_HEADING>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Database Time : <DBTIME>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Database Name : <DBNAME>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Batch <BATCH> : <MIGRATION_GROUP>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' The monitor has encountered the following condition :-');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '    <ALERT_MESSAGE>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '--- END OF EMAIL --------------------------------------------------------');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '<p><img src="http://upload.wikimedia.org/wikipedia/en/1/15/Ihs_markit_logo.png" alt="Markit" />');
+      pr_add_to_text(i_text => '</pre></body></html>');
+      o_text_body := l_text_body;
+   END pr_setup_alert_email_text;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_setup_email_text
+   (
+      i_completed_bool IN BOOLEAN
+     ,o_text_body      OUT CLOB
+   ) IS
+      l_text_body VARCHAR2(32000);
+      PROCEDURE pr_add_to_text(i_text IN VARCHAR2) IS
+      BEGIN
+      
+         l_text_body := l_text_body || nvl(i_text, ' ') || fn_lf;
+      
+      END pr_add_to_text;
+   BEGIN
+      pr_add_to_text(i_text => '<html><body><pre>');
+      pr_add_to_text(i_text => 'MIGRATION IS RUNNING');
+      pr_add_to_text(i_text => '====================');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Database Time : <DBTIME>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Database Name : <DBNAME>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => ' Batch <BATCH> : <MIGRATION_GROUP> has been launched with the following parameters :-');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '    Start At Step          : <START_AT_STEP>               ');
+      pr_add_to_text(i_text => '    Stopping At Step       : <STOP_AT_STEP>                ');
+      pr_add_to_text(i_text => '    Concurrency            : <CONCURRENCY>                 ');
+      pr_add_to_text(i_text => '    Target Rows Per Thread : <TARGET_ROWS_PER_THREAD>      ');
+      pr_add_to_text(i_text => NULL);
+      IF i_completed_bool
+      THEN
+         pr_add_to_text(i_text => '    Migration is COMPLETE.');
+         pr_add_to_text(i_text => NULL);
+      ELSE
+         pr_add_to_text(i_text => '    Currently Running      : <MIGRATION_STEP> (AKA : Step <STEP_NUMBER> out of <MAX_STEPS>)');
+         pr_add_to_text(i_text => NULL);
+         pr_add_to_text(i_text => NULL);
+         pr_add_to_text(i_text => ' The next email update will occur in approximately <CYCLE> minutes.  ');
+         pr_add_to_text(i_text => ' Earlier emails will arrive if a step fails, or if a processing step issues');
+         pr_add_to_text(i_text => ' an explicit request to emit an update, for example after a known big step.');
+      END IF;
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '<ESTIMATES>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '-------------------------------------------------------------------------');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => 'LOGS SINCE LAST EMAIL');
+      pr_add_to_text(i_text => '=====================');
+      pr_add_to_text(i_text => '<FAILURES>');
+      pr_add_to_text(i_text => '<LOGS>');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '--- END OF EMAIL --------------------------------------------------------');
+      pr_add_to_text(i_text => NULL);
+      pr_add_to_text(i_text => '<p><img src="http://upload.wikimedia.org/wikipedia/en/1/15/Ihs_markit_logo.png" alt="Markit" />');
+      pr_add_to_text(i_text => '</pre></body></html>');
+      o_text_body := l_text_body;
+   END pr_setup_email_text;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_perform_action_instructions IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      --
+      ex_object_not_exist EXCEPTION;
+      PRAGMA EXCEPTION_INIT(ex_object_not_exist, -4043);
+   BEGIN
+      FOR i_buf IN (SELECT oei.*
+                          ,oei.rowid rid
+                      FROM on_etl_instruction oei)
+      LOOP
+         IF i_buf.action_name = 'DELETE'
+         THEN
+            BEGIN
+               EXECUTE IMMEDIATE 'DROP PROCEDURE ' ||
+                                 i_buf.action_item;
+               pr_log(i_log_type  => fn_status
+                     ,i_log_entry => 'TIDIED AWAY : ' ||
+                                     i_buf.action_item);
+            EXCEPTION
+               WHEN ex_object_not_exist THEN
+                  NULL;
+            END;
+            DELETE FROM on_etl_instruction WHERE ROWID = i_buf.rid;
+         ELSE
+            raise_application_error(-20000
+                                   ,'migration_run_framework : pr_perform_action_instructions : Unrecognised instruction.');
+         END IF;
+      END LOOP;
+      --
+      COMMIT;
+   END pr_perform_action_instructions;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_log
+   (
+      i_log_type           IN VARCHAR2
+     ,i_log_entry          IN VARCHAR2
+     ,i_log_batch          IN NUMBER DEFAULT to_number(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch))
+     ,i_log_migation_group IN VARCHAR2 DEFAULT pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+     ,i_log_activity_group IN VARCHAR2 DEFAULT pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_step_name)
+     ,i_log_extended_info  IN CLOB DEFAULT NULL
+   ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      l_log_extended_info CLOB;
+      l_context_setup     CLOB := 'Context Setup' || fn_lf ||
+                                  '=============' || fn_lf || 'BEGIN' ||
+                                  fn_lf;
+   BEGIN
+      IF i_log_type = fn_error
+      THEN
+         -- Capture the context state for MIGRATION_CONTEXT so that developers can 
+         -- re-setup the identical context configuration.
+         FOR i_buf IN (SELECT *
+                         FROM gv$globalcontext gc
+                        WHERE gc.namespace = 'MIGRATION_CONTEXT'
+                        ORDER BY gc.attribute)
+         LOOP
+            dbms_lob.append(l_context_setup
+                           ,'   pkg_pre_etl_tools.pr_set_context(i_attr  => ' ||
+                            chr(39) || i_buf.attribute || chr(39) ||
+                            ' ,i_value => ' || chr(39) ||
+                            i_buf.value || chr(39) || ');' || fn_lf);
+         END LOOP;
+         dbms_lob.append(l_context_setup, 'END;' || fn_lf || fn_lf);
+         --
+         dbms_lob.append(l_context_setup
+                        ,nvl(i_log_extended_info, ' '));
+         l_log_extended_info := l_context_setup;
+         --
+         -- Set fault detected.
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_fault_detected
+                                         ,i_value => 'TRUE');
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
+                                         ,i_value => fn_failed);
+      ELSE
+         l_log_extended_info := i_log_extended_info;
+      END IF;
+      -- 
+      --
+      INSERT INTO on_etl_log
+         (log_id
+         ,log_type
+         ,log_batch
+         ,log_context
+         ,log_migration_group
+         ,log_activity_group
+         ,log_entry
+         ,log_extended_info)
+      VALUES
+         (on_etl_seq_oel.nextval
+         ,i_log_type
+         ,i_log_batch
+         ,nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr                      => migration_run_framework.fn_ctx_run_context
+                                                    ,i_fail_if_no_run_context_yn => 'N')
+             ,'STANDALONE')
+         ,i_log_migation_group
+         ,i_log_activity_group
+         ,i_log_entry
+         ,l_log_extended_info);
+      COMMIT;
+   END pr_log;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_cleanup_request(i_procedure_name IN VARCHAR2) IS
+   BEGIN
+      INSERT INTO on_etl_instruction
+         (action_name
+         ,action_item)
+      VALUES
+         ('DELETE'
+         ,i_procedure_name);
+   END pr_cleanup_request;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_high_performance_mode IS
+   BEGIN
+      dbms_resource_manager.switch_consumer_group_for_sess(session_id     => dbms_debug_jdwp.current_session_id
+                                                          ,session_serial => dbms_debug_jdwp.current_session_serial
+                                                          ,consumer_group => 'PRIORITY_MAINTENANCE');
+   
+      EXECUTE IMMEDIATE 'alter session set parallel_force_local = TRUE';
+   
+   END pr_high_performance_mode;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_normal_performance_mode IS
+   BEGIN
+      -- For some reason we can't switch to OTHER_GROUPS..
+      dbms_resource_manager.switch_consumer_group_for_sess(session_id     => dbms_debug_jdwp.current_session_id
+                                                          ,session_serial => dbms_debug_jdwp.current_session_serial
+                                                          ,consumer_group => 'DEFAULT_CONSUMER_GROUP');
+   END pr_normal_performance_mode;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_generate_email
+   (
+      i_mode IN VARCHAR2
+     ,io_ts  IN OUT TIMESTAMP
+   ) IS
+      CURSOR cur_log_warn_fail
+      (
+         c_migration_group IN VARCHAR2
+        ,c_batch           IN NUMBER
+        ,c_ts_start_time   IN TIMESTAMP
+      ) IS
+         SELECT NULL
+           FROM on_etl_log oel
+          WHERE oel.log_migration_group = c_migration_group
+            AND oel.log_batch = c_batch
+            AND oel.log_ts > c_ts_start_time
+            AND (oel.log_type = 'WARNING' OR oel.log_type = 'ERROR')
+            AND rownum <= 2;
+      cur_log_warn_fail_buf cur_log_warn_fail%ROWTYPE;
+      l_clob_line           CLOB;
+      l_line                VARCHAR2(32000);
+      l_count               NUMBER;
+      l_compare_ts          TIMESTAMP;
+      --
+      CURSOR cur_estimates IS
+         WITH frst AS
+          (SELECT oel.log_activity_group
+             FROM pre_etl_owner.on_etl_log oel
+            WHERE oel.log_id =
+                  (SELECT MAX(oel2.log_id)
+                     FROM pre_etl_owner.on_etl_log oel2)),
+         ctx AS
+          (SELECT /*+materialize */
+            to_number(a.value) rpt
+             FROM v$globalcontext a
+            WHERE a.namespace = 'MIGRATION_CONTEXT'
+              AND a.attribute = 'MGCTX_ROWS_PER_THREAD'),
+         concurrency AS
+          (SELECT /*+materialize */
+            to_number(a.value) con
+             FROM v$globalcontext a
+            WHERE a.namespace = 'MIGRATION_CONTEXT'
+              AND a.attribute = 'MGCTX_CONCURRENCY'),
+         cnt AS
+          (SELECT /*+materialize */
+            o.partitions_in_set * (SELECT rpt FROM ctx) AS count_of_rows
+             FROM on_etl_driver o
+            WHERE rownum = 1),
+         avg_runtime_in_secs AS
+          (SELECT /*+materialize */
+            round(AVG(CAST(a.log_ts AS DATE) -
+                      CAST((SELECT b.log_ts
+                              FROM pre_etl_owner.on_etl_log b
+                             WHERE b.log_activity_group =
+                                   (SELECT frst.log_activity_group
+                                      FROM frst)
+                               AND b.log_entry =
+                                   'GENERATED : ' ||
+                                   ltrim(a.log_entry, 'TIDIED AWAY : ')) AS DATE)) * 24 * 60 * 60) AS secs
+             FROM (SELECT /*+index(oel OEL_PK) */
+                    *
+                     FROM pre_etl_owner.on_etl_log oel
+                    WHERE oel.log_id >
+                          (SELECT MAX(oel2.log_id) - 200
+                             FROM pre_etl_owner.on_etl_log oel2)
+                      AND oel.log_activity_group =
+                          (SELECT frst.log_activity_group FROM frst)
+                    ORDER BY oel.log_id DESC) a
+            WHERE rownum < 100
+              AND a.log_entry LIKE 'TIDIED AWAY : %'
+              AND a.log_activity_group =
+                  (SELECT log_activity_group
+                     FROM (SELECT /*+index(oel OEL_PK) */
+                            *
+                             FROM pre_etl_owner.on_etl_log oel
+                            WHERE oel.log_id >
+                                  (SELECT MAX(oel2.log_id) - 200
+                                     FROM pre_etl_owner.on_etl_log oel2)
+                              AND oel.log_activity_group =
+                                  (SELECT frst.log_activity_group
+                                     FROM frst)
+                            ORDER BY oel.log_id DESC)
+                    WHERE log_entry LIKE 'JOB LAUNCHED%'
+                      AND log_id >
+                          (SELECT MAX(oel2.log_id) - 200
+                             FROM pre_etl_owner.on_etl_log oel2)
+                      AND rownum = 1)),
+         current_task AS
+          (SELECT to_number(substr(ltrim(log_entry
+                                        ,'TIDIED AWAY : mig_')
+                                  ,1
+                                  ,instr(ltrim(log_entry
+                                              ,'TIDIED AWAY : mig_')
+                                        ,'_') - 1)) done_tasks
+             FROM (SELECT * FROM on_etl_log ORDER BY log_id DESC)
+            WHERE rownum = 1
+              AND log_entry LIKE 'TIDIED AWAY : mig_%')
+         SELECT round((count_of_rows / ctx.rpt) + 0.5) AS threads_in_task
+               ,greatest(round(((count_of_rows / ctx.rpt) -
+                               ct.done_tasks)) - con
+                        ,0) AS remaining_threads
+               ,concurrency.con AS concurrent_capacity
+               ,avg_runtime_in_secs.secs average_thread_time_in_secs
+               ,round((((((count_of_rows / ctx.rpt) -
+                      (ct.done_tasks - (con))) *
+                      avg_runtime_in_secs.secs) / concurrency.con) -
+                      avg_runtime_in_secs.secs) / 60
+                     ,2) mins_till_completion
+           FROM cnt
+          CROSS JOIN ctx
+          CROSS JOIN current_task ct
+          CROSS JOIN concurrency
+          CROSS JOIN avg_runtime_in_secs
+          WHERE (SELECT COUNT(*)
+                   FROM v$globalcontext a
+                  WHERE a.attribute LIKE 'MIG/_%' ESCAPE
+                  '/'
+                    AND a.value = 'STARTED') > 0;
+      cur_estimates_buf cur_estimates%ROWTYPE;
+      --
+      --
+      CURSOR cur_pemh
+      (
+         c_migration_group IN VARCHAR2
+        ,c_migration_name  IN VARCHAR2
+      ) IS
+         SELECT inline_pemh.migration_name
+               ,inline_pemh.step_no
+               ,(SELECT COUNT(*)
+                   FROM pre_etl_migration_header pemh
+                  WHERE pemh.migration_group = c_migration_group) maximum_steps
+           FROM (SELECT pemh.migration_name
+                       ,row_number() over(PARTITION BY pemh.migration_group ORDER BY pemh.order_of_exec) step_no
+                   FROM pre_etl_migration_header pemh
+                  WHERE pemh.migration_group = c_migration_group) inline_pemh
+          WHERE inline_pemh.migration_name = c_migration_name;
+      cur_pemh_buf cur_pemh%ROWTYPE;
+      --
+      CURSOR cur_log
+      (
+         c_migration_group IN VARCHAR2
+        ,c_batch           IN NUMBER
+        ,c_ts_start_time   IN TIMESTAMP
+      ) IS
+         WITH sl_qf AS
+          (SELECT *
+             FROM on_etl_log oel
+            WHERE oel.log_migration_group = c_migration_group
+              AND oel.log_batch = c_batch
+              AND oel.log_ts > c_ts_start_time
+            ORDER BY oel.log_ts DESC)
+         SELECT log_type
+               ,log_entry
+               ,log_ts
+               ,REPLACE(TRIM(to_char(round(extract(hour
+                                                   FROM(log_ts -
+                                                        lag(log_ts
+                                                           ,1
+                                                           ,NULL)
+                                                        over(ORDER BY
+                                                             log_ts))))
+                                    ,'00')) || ':' ||
+                        TRIM(to_char(round(extract(minute
+                                                   FROM(log_ts -
+                                                        lag(log_ts
+                                                           ,1
+                                                           ,NULL)
+                                                        over(ORDER BY
+                                                             log_ts))))
+                                    ,'00')) || ':' ||
+                        TRIM(to_char(round(extract(SECOND
+                                                   FROM(log_ts -
+                                                        lag(log_ts
+                                                           ,1
+                                                           ,NULL)
+                                                        over(ORDER BY
+                                                             log_ts))))
+                                    ,'00'))
+                       ,'::'
+                       ,'Started.') time_for_step
+               ,TRIM(to_char(round(extract(hour
+                                           FROM(log_ts - MIN(log_ts)
+                                                over(PARTITION BY
+                                                     log_batch))))
+                            ,'00')) || ':' ||
+                TRIM(to_char(round(extract(minute
+                                           FROM(log_ts - MIN(log_ts)
+                                                over(PARTITION BY
+                                                     log_batch))))
+                            ,'00')) || ':' ||
+                TRIM(to_char(round(extract(SECOND
+                                           FROM(log_ts - MIN(log_ts)
+                                                over(PARTITION BY
+                                                     log_batch))))
+                            ,'00')) time_since_start
+           FROM sl_qf sl
+          ORDER BY log_ts ASC;
+      --
+      l_email_status_body CLOB;
+   
+   BEGIN
+      -- Setup the basic email with all the unreplaced TAGS ready for replacement.
+      pr_setup_email_text(i_completed_bool => (CASE
+                                               pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_step_name)
+                                                 WHEN fn_completed THEN
+                                                  TRUE
+                                                 ELSE
+                                                  FALSE
+                                              END)
+                         ,o_text_body      => l_email_status_body);
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<DBTIME>'
+                ,i_replace_val         => to_char(SYSDATE
+                                                 ,'DD-MON-RRRR HH24:MI:SS'));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<BATCH>'
+                ,i_replace_val         => nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch)
+                                             ,'Unknown - context unavailable'));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<MIGRATION_GROUP>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<DBNAME>'
+                ,i_replace_val         => fn_get_global_name);
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<START_AT_STEP>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_start_at_step));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<STOP_AT_STEP>'
+                ,i_replace_val         => nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_stop_at_step)
+                                             ,'N/A - Until all steps are complete.'));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<CONCURRENCY>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_concurrency));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<TARGET_ROWS_PER_THREAD>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_rows_per_thread));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<MIGRATION_STEP>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_step_name));
+   
+      --
+      OPEN cur_pemh(c_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                   ,c_migration_name  => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_step_name));
+      FETCH cur_pemh
+         INTO cur_pemh_buf;
+      CLOSE cur_pemh;
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<STEP_NUMBER>'
+                ,i_replace_val         => cur_pemh_buf.step_no);
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<MAX_STEPS>'
+                ,i_replace_val         => cur_pemh_buf.maximum_steps);
+      --
+      IF i_mode = fn_dev
+      THEN
+         pr_replace(io_email_body         => l_email_status_body
+                   ,i_replace_placeholder => '<CYCLE>'
+                   ,i_replace_val         => fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                         ,i_param_name      => fn_param_const_dev_cycle));
+      ELSIF i_mode = fn_man
+      THEN
+         pr_replace(io_email_body         => l_email_status_body
+                   ,i_replace_placeholder => '<CYCLE>'
+                   ,i_replace_val         => fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                         ,i_param_name      => fn_param_const_man_cycle));
+      END IF;
+   
+      OPEN cur_log_warn_fail(c_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                            ,c_batch           => to_number(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch))
+                            ,c_ts_start_time   => to_timestamp(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_start_time)
+                                                              ,'DD-MON-YYYY HH24:MI:SS.FF6'));
+   
+      FETCH cur_log_warn_fail
+         INTO cur_log_warn_fail_buf;
+      IF cur_log_warn_fail%FOUND
+      THEN
+         pr_replace(io_email_body         => l_email_status_body
+                   ,i_replace_placeholder => '<FAILURES>'
+                   ,i_replace_val         => fn_lf ||
+                                             'There are ERROR or WARNING entries in the log : Check the logs...' ||
+                                             fn_lf);
+      ELSE
+         pr_replace(io_email_body         => l_email_status_body
+                   ,i_replace_placeholder => '<FAILURES>'
+                   ,i_replace_val         => '');
+      END IF;
+      CLOSE cur_log_warn_fail;
+   
+      --
+      BEGIN
+         OPEN cur_estimates;
+         FETCH cur_estimates
+            INTO cur_estimates_buf;
+         IF cur_estimates%FOUND
+         THEN
+            pr_replace(io_email_body         => l_email_status_body
+                      ,i_replace_placeholder => '<ESTIMATES>'
+                      ,i_replace_val         => ' Stats for step completion' ||
+                                                fn_lf ||
+                                                ' =========================' ||
+                                                fn_lf || fn_lf ||
+                                                '   Threads In Task            : ' ||
+                                                cur_estimates_buf.threads_in_task ||
+                                                chr(10) ||
+                                                '   Remaining Threads          : ' ||
+                                                cur_estimates_buf.remaining_threads ||
+                                                chr(10) ||
+                                                '   Concurrency Capacity       : ' ||
+                                                cur_estimates_buf.concurrent_capacity ||
+                                                chr(10) ||
+                                                '   Avg Thread Completion Time : ' ||
+                                                cur_estimates_buf.average_thread_time_in_secs ||
+                                                chr(10) ||
+                                                '   Mins Until Step Completion : ' ||
+                                                cur_estimates_buf.mins_till_completion);
+         ELSE
+            pr_replace(io_email_body         => l_email_status_body
+                      ,i_replace_placeholder => '<ESTIMATES>'
+                      ,i_replace_val         => ' * No Estimate Possible For Process Step.');
+         END IF;
+         CLOSE cur_estimates;
+      EXCEPTION
+         WHEN OTHERS THEN
+            IF SQLCODE = -8103
+            THEN
+               pr_replace(io_email_body         => l_email_status_body
+                         ,i_replace_placeholder => '<ESTIMATES>'
+                         ,i_replace_val         => ' * A problem was encountered getting the estimates. (-8103)');
+               IF cur_estimates%ISOPEN
+               THEN
+                  CLOSE cur_estimates;
+               END IF;
+            ELSE
+               RAISE;
+            END IF;
+      END;
+      --
+   
+      l_clob_line  := NULL;
+      l_line       := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group) ||
+                      ' : ' ||
+                      pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch) ||
+                      ' : Migration Started At : ' ||
+                      pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_start_time) ||
+                      fn_lf;
+      l_line       := l_line || fn_lf || 'Log Time' || '   ' ||
+                      'Step Elapsed Time' || '   ' ||
+                      'Phase Total Elapsed' || '   ' ||
+                      'Log Message...' || fn_lf;
+      l_line       := l_line || '========' || '   ' ||
+                      '=================' || '   ' ||
+                      '===================' || '   ' ||
+                      '==============' || fn_lf;
+      l_count      := 0;
+      l_compare_ts := io_ts;
+      -- Note that we loop through all the entries for this batch since start, and only output the ones that are greater than
+      -- the necessary time.  This is so we can capture correct step elapsed times...
+      FOR i_buf IN cur_log(c_migration_group => TRIM(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group))
+                          ,c_batch           => to_number(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch))
+                          ,c_ts_start_time   => to_timestamp(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_start_time)
+                                                            ,'DD-MON-YYYY HH24:MI:SS.FF6'))
+      LOOP
+         IF i_buf.log_ts > l_compare_ts
+         THEN
+            l_line := l_line || to_char(i_buf.log_ts, 'HH24:MI:SS') ||
+                      '   ' || rpad(i_buf.time_for_step, 17, ' ') ||
+                      '   ' || rpad(i_buf.time_since_start, 19, ' ') ||
+                      '   ' || i_buf.log_type ||
+                      (CASE nvl(i_buf.log_entry, '#')
+                         WHEN '#' THEN
+                          NULL
+                         ELSE
+                          lpad(' ', (9 - length(i_buf.log_type)), ' ') ||
+                          ' : '
+                      END) ||
+                      REPLACE(i_buf.log_entry
+                             ,fn_lf
+                             ,fn_lf ||
+                              '                                                                 ') ||
+                      fn_lf;
+            --
+            io_ts   := i_buf.log_ts;
+            l_count := l_count + 1;
+            IF MOD(l_count, 20) = 0
+            THEN
+               l_clob_line := l_clob_line || l_line;
+               l_line      := NULL;
+            END IF;
+         END IF;
+      END LOOP;
+   
+      --
+      IF l_count = 0
+      THEN
+         l_line := l_line || fn_lf || 'The phase is still running.' ||
+                   fn_lf;
+         l_line := l_line ||
+                   'There have been no new log entries since the last email...' ||
+                   fn_lf;
+      ELSIF l_count >= fn_max_lines
+      THEN
+         l_clob_line := 'Some log entires were removed for brevity...' ||
+                        fn_lf(2) || l_clob_line;
+      END IF;
+      --
+      l_clob_line := l_clob_line || l_line;
+      --
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<LOGS>'
+                ,i_replace_val         => l_clob_line);
+      --
+      pr_log(i_log_type          => fn_info
+            ,i_log_entry         => 'EMAIL Generated for : ' ||
+                                    i_mode
+            ,i_log_extended_info => l_email_status_body);
+      --
+      pr_email_status(i_subject => 'Migration Status Report : ' ||
+                                   fn_get_global_name
+                     ,i_body    => l_email_status_body
+                     ,i_mode    => i_mode);
+   EXCEPTION
+      WHEN OTHERS THEN
+         pr_log(i_log_type  => fn_warning
+               ,i_log_entry => 'migration_run_framework : pr_generate_email : Could not generate email : ' ||
+                               SQLERRM);
+   END pr_generate_email;
+
+   --------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_generate_alert_email
+   (
+      i_message_heading IN VARCHAR2
+     ,i_message         IN VARCHAR2
+     ,i_mode            IN VARCHAR2
+   ) IS
+      l_email_status_body CLOB;
+   BEGIN
+      -- Setup the basic email with all the unreplaced TAGS ready for replacement.
+      pr_setup_alert_email_text(o_text_body => l_email_status_body);
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<MESSAGE_HEADING>'
+                ,i_replace_val         => upper(i_message_heading) ||
+                                          fn_lf || lpad('='
+                                                       ,length(i_message_heading)
+                                                       ,'=') || fn_lf);
+   
+      -- These replaced TAGs do not change during the run but we need to set them up for each email.
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<DBTIME>'
+                ,i_replace_val         => to_char(SYSDATE
+                                                 ,'DD-MON-RRRR HH24:MI:SS'));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<BATCH>'
+                ,i_replace_val         => nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch)
+                                             ,'Unknown - context unavailable'));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<MIGRATION_GROUP>'
+                ,i_replace_val         => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group));
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<DBNAME>'
+                ,i_replace_val         => fn_get_global_name);
+   
+      pr_replace(io_email_body         => l_email_status_body
+                ,i_replace_placeholder => '<ALERT_MESSAGE>'
+                ,i_replace_val         => i_message);
+   
+      pr_log(i_log_type          => fn_info
+            ,i_log_entry         => 'EMAIL Generated for : ' ||
+                                    i_mode
+            ,i_log_extended_info => l_email_status_body);
+   
+      pr_email_status(i_subject => 'Migration Status Report : ' ||
+                                   fn_get_global_name
+                     ,i_body    => l_email_status_body
+                     ,i_mode    => i_mode);
+   END pr_generate_alert_email;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_child_process
+   (
+      i_batch           IN NUMBER
+     ,i_statement       IN CLOB
+     ,i_task_number     IN NUMBER
+     ,i_start_at_thread IN NUMBER
+     ,i_migration_group IN VARCHAR2
+     ,i_migration_name  IN VARCHAR2
+     ,i_total_threads   IN NUMBER
+     ,i_concurrency     IN NUMBER
+     ,i_job_class_name  IN VARCHAR2
+   ) IS
+      const_sql_variable VARCHAR2(30) := 'l_sql_clob';
+      l_statement_clob   CLOB;
+      --
+      l_instance_number    NUMBER;
+      l_procedure_name     VARCHAR(30);
+      l_scheduler_job_name VARCHAR2(30);
+      --
+      TYPE t_tab_of_procs IS TABLE OF VARCHAR2(30) INDEX BY BINARY_INTEGER;
+      l_tab_of_procs t_tab_of_procs;
+      --
+      l_include_batch_bool BOOLEAN;
+      l_error_bool         BOOLEAN;
+      --
+      FUNCTION fn_get_touch_table
+      (
+         i_migration_group IN VARCHAR2
+        ,i_migration_name  IN VARCHAR2
+      ) RETURN VARCHAR2 IS
+         l_return VARCHAR2(61);
+      BEGIN
+         SELECT pemh.staged_schema || '.' || pems.table_name
+           INTO l_return
+           FROM pre_etl_migration_src pems
+           JOIN pre_etl_migration_header pemh
+             ON (pemh.migration_group = pems.migration_group AND
+                pemh.migration_name = pems.migration_name)
+          WHERE pems.migration_group = i_migration_group
+            AND pems.migration_name = i_migration_name
+            AND pems.use_with_on_etl_driver_yn = 'Y';
+         RETURN l_return;
+      EXCEPTION
+         WHEN no_data_found THEN
+            RETURN NULL;
+      END fn_get_touch_table;
+      --
+      FUNCTION fn_get_touch_enabled
+      (
+         i_migration_group IN VARCHAR2
+        ,i_migration_name  IN VARCHAR2
+      ) RETURN VARCHAR2 IS
+         l_return pre_etl_migration_detail.touch_migration_status_yn%TYPE;
+      BEGIN
+         SELECT pemd.touch_migration_status_yn
+           INTO l_return
+           FROM pre_etl_migration_detail pemd
+          WHERE pemd.migration_group = i_migration_group
+            AND pemd.migration_name = i_migration_name;
+         RETURN l_return;
+      EXCEPTION
+         WHEN no_data_found THEN
+            RETURN 'N';
+      END fn_get_touch_enabled;
+      --
+      FUNCTION fn_count RETURN NUMBER IS
+         ln_count    NUMBER;
+         l_child_job VARCHAR2(30) := fn_child_job;
+      BEGIN
+         SELECT COUNT(*)
+           INTO ln_count
+           FROM user_scheduler_jobs
+          WHERE job_name LIKE l_child_job ESCAPE '/';
+         RETURN ln_count;
+      END fn_count;
+      --
+      FUNCTION fn_inject_l_sql_clob
+      (
+         i_statement IN CLOB
+        ,i_variable  IN VARCHAR2
+      ) RETURN CLOB IS
+         const_chunk_size CONSTANT PLS_INTEGER := 10000;
+         l_count        PLS_INTEGER := 0;
+         l_total_length PLS_INTEGER := length(i_statement);
+         l_cut_start    PLS_INTEGER := 1;
+         l_return       CLOB := '   ' || i_variable || ' := q' ||
+                                chr(39) || '[';
+      BEGIN
+         -- Cuts up a statement so that we don't blow the literal maximum.
+         WHILE TRUE
+         LOOP
+            l_count := l_count + 1;
+            IF l_count > 1
+            THEN
+               l_return := l_return || ']' || chr(39) || ';' || fn_lf ||
+                           '   ' || i_variable || ' := ' ||
+                           i_variable || ' || q' || chr(39) || '[';
+            END IF;
+            --
+            l_return := l_return ||
+                        substr(i_statement
+                              ,l_cut_start
+                              ,const_chunk_size);
+            IF (l_cut_start + const_chunk_size) > l_total_length
+            THEN
+               EXIT;
+            END IF;
+            --
+            l_cut_start := l_cut_start + const_chunk_size;
+         END LOOP;
+         --
+         l_return := l_return || ']' || chr(39) || ';';
+         --
+         RETURN l_return;
+      END fn_inject_l_sql_clob;
+   
+   BEGIN
+      IF instr(upper(i_statement), pkg_pre_etl_tools.fn_batch) > 0
+         AND i_batch IS NOT NULL
+      THEN
+         -- A batch would be in the with statement (as an inline view) - so its the first bind.
+         l_include_batch_bool := TRUE;
+      END IF;
+      --
+      pr_log(i_log_type  => fn_status
+            ,i_log_entry => 'STARTING : Launching Child Processes for : ' ||
+                            i_migration_name || ' - TASK# ' ||
+                            to_char(i_task_number));
+      FOR i IN nvl(i_start_at_thread, 0) .. greatest((i_total_threads - 1)
+                                                    ,0) /* because 0 is a thread */
+      LOOP
+         l_procedure_name := 'mig_' || to_char(i) || '_' ||
+                             to_char(systimestamp
+                                    ,'YYYYMMDDHH24MISSFF6');
+         --
+         pkg_pre_etl_tools.pr_set_context(i_attr  => l_procedure_name
+                                         ,i_value => 'STARTING');
+         l_tab_of_procs(l_tab_of_procs.COUNT + 1) := l_procedure_name;
+         --                                  
+         l_statement_clob := 'CREATE PROCEDURE ' || l_procedure_name ||
+                             ' IS ' || fn_lf || '   ' || const_sql_variable ||
+                             ' CLOB;' || fn_lf || 'BEGIN' || fn_lf ||
+                             '  migration_run_framework.pr_set_consumer_group;' ||
+                             fn_lf || fn_no_parallel_for_session_txt ||
+                             fn_lf ||
+                             '  pkg_pre_etl_tools.pr_set_context(i_attr => ' ||
+                             chr(39) || l_procedure_name || chr(39) ||
+                             ',i_value => ''STARTED'');' || fn_lf ||
+                             fn_inject_l_sql_clob(i_statement => 'DECLARE ' ||
+                                                                 fn_lf ||
+                                                                 (CASE
+                                                                    WHEN l_include_batch_bool THEN
+                                                                     ' l_batch_bind NUMBER        := :batch;  /* Guarantee order of bind */' ||
+                                                                     fn_lf ||
+                                                                     ' l_thread_bind VARCHAR2(10) := :thread_number; /* Guarantee order of bind */' ||
+                                                                     fn_lf
+                                                                    ELSE
+                                                                     ' l_thread_bind VARCHAR2(10) := :thread_number; /* Guarantee order of bind */' ||
+                                                                     fn_lf
+                                                                 END) ||
+                                                                 fn_lf ||
+                                                                 'BEGIN ' ||
+                                                                 fn_lf ||
+                                                                 pkg_pre_etl_tools.fn_contextualize(i_subject => i_statement
+                                                                                                   ,i_context => pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_run_context)) ||
+                                                                 fn_lf ||
+                                                                 'END;'
+                                                  
+                                                 ,i_variable => const_sql_variable) ||
+                             fn_lf || '   EXECUTE IMMEDIATE l_sql_clob ' ||
+                             fn_lf || '     USING ' || (CASE
+                                WHEN l_include_batch_bool THEN
+                                 to_char(i_batch) || ','
+                                ELSE
+                                 NULL
+                             END) || chr(39) || to_char(i) || chr(39) || ';' ||
+                             fn_lf || (CASE
+                              fn_get_touch_enabled(i_migration_group => i_migration_group
+                                                  ,i_migration_name  => i_migration_name)
+                                WHEN 'Y' THEN
+                                 '  EXECUTE IMMEDIATE ''UPDATE ' ||
+                                 pkg_pre_etl_tools.fn_contextualize(i_subject => fn_get_touch_table(i_migration_group => i_migration_group
+                                                                                                   ,i_migration_name  => i_migration_name)
+                                                                   ,i_context => pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_run_context)) ||
+                                 ' mig_src SET mig_src.migration_status = ''''M'''' WHERE mig_src.rowid IN ( SELECT gtms.rid FROM GTT_TOUCH_MIGRATION_STATUS gtms )''; ' ||
+                                 fn_lf
+                                ELSE
+                                 NULL
+                             END) ||
+                             '  pkg_pre_etl_utilities.pr_dump_introspection_stats;' ||
+                             fn_lf ||
+                             '  pkg_pre_etl_tools.pr_destroy_context_attr(i_attr => ' ||
+                             chr(39) || l_procedure_name || chr(39) || ');' ||
+                             fn_lf ||
+                             '  migration_run_framework.pr_cleanup_request(i_procedure_name =>' ||
+                             chr(39) || l_procedure_name || chr(39) || ');' ||
+                             fn_lf || '  COMMIT;' || fn_lf || 'EXCEPTION' ||
+                             fn_lf || ' WHEN OTHERS THEN ' || fn_lf ||
+                             '  ROLLBACK;' || fn_lf ||
+                             '  migration_run_framework.pr_log(i_log_type  => migration_run_framework.fn_error' ||
+                             fn_lf ||
+                             '                                ,i_log_entry => ' ||
+                             chr(39) || 'ERROR IN : ' || l_procedure_name ||
+                             ' : ' || chr(39) || '||SQLERRM);' || fn_lf ||
+                             '  RAISE;' || fn_lf || 'END ' ||
+                             l_procedure_name || ';';
+         BEGIN
+            EXECUTE IMMEDIATE l_statement_clob;
+            pr_log(i_log_type  => fn_status
+                  ,i_log_entry => 'GENERATED : ' || l_procedure_name);
+         EXCEPTION
+            WHEN OTHERS THEN
+               pr_log(i_log_type  => fn_error
+                     ,i_log_entry => 'ERROR IN GENERATION OF CODE FOR : ' ||
+                                     l_procedure_name ||
+                                     ' - Examine the failed code.');
+               raise_application_error(-20000
+                                      ,'Failure to create migration procedure : ' ||
+                                       l_procedure_name);
+         END;
+      
+         l_scheduler_job_name := 'MIG_TASK_' || to_char(i);
+         dbms_scheduler.create_job(start_date => systimestamp +
+                                                 INTERVAL '1' SECOND
+                                  ,job_name   => l_scheduler_job_name
+                                  ,job_class  => (CASE
+                                                  i_job_class_name
+                                                    WHEN
+                                                     'FIXED INSTANCE' THEN
+                                                     'DEFAULT_JOB_CLASS'
+                                                    ELSE
+                                                     i_job_class_name
+                                                 END)
+                                  ,job_type   => 'PLSQL_BLOCK'
+                                  ,job_action => 'BEGIN ' ||
+                                                 l_procedure_name ||
+                                                 '; END;'
+                                  ,enabled    => TRUE
+                                  ,auto_drop  => TRUE);
+      
+         IF i_job_class_name = 'FIXED INSTANCE'
+         THEN
+            SELECT instance_number
+              INTO l_instance_number
+              FROM v$instance;
+            dbms_scheduler.set_attribute(NAME      => l_scheduler_job_name
+                                        ,attribute => 'INSTANCE_ID'
+                                        ,VALUE     => to_char(l_instance_number));
+         END IF;
+         /*
+         dbms_scheduler.set_attribute(name      => l_scheduler_job_name
+                                     ,attribute => 'RESTARTABLE'
+                                     ,value     => TRUE);
+         */
+         --
+         pr_log(i_log_type          => fn_status
+               ,i_log_entry         => 'JOB LAUNCHED : ' ||
+                                       l_scheduler_job_name
+               ,i_log_extended_info => 'BEGIN ' || l_procedure_name ||
+                                       '; END;');
+         COMMIT;
+         --
+      
+         --
+         WHILE fn_count >= i_concurrency
+         LOOP
+            dbms_lock.sleep(seconds => 2);
+            pr_perform_action_instructions;
+         END LOOP;
+         --
+         pr_perform_action_instructions;
+         --
+         IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
+               ,'FALSE') = 'TRUE'
+            OR nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+                  ,'FALSE') = 'TRUE'
+         THEN
+            EXIT;
+         END IF;
+      END LOOP;
+      --
+      IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
+            ,'FALSE') = 'TRUE'
+         OR nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+               ,'FALSE') = 'TRUE'
+      THEN
+         pr_log(i_log_type  => fn_status
+               ,i_log_entry => 'FAULT OR KILL DETECTED : No Further Child Processes for : ' ||
+                               i_migration_name || ' - TASK# ' ||
+                               to_char(i_task_number));
+      ELSE
+         WHILE fn_count != 0
+         LOOP
+            dbms_lock.sleep(seconds => 2);
+            pr_perform_action_instructions;
+         END LOOP;
+         pr_log(i_log_type  => fn_status
+               ,i_log_entry => 'COMPLETE : No Further Child Processes for : ' ||
+                               i_migration_name || ' - TASK# ' ||
+                               to_char(i_task_number));
+      END IF;
+      --
+      --
+      pr_perform_action_instructions;
+      --
+      --
+      -- We keep a track of every procedure we create and run.
+      -- When a child procedure starts it creates a context, something like this..
+      -- (basically the same name as the generated procedure).
+      --
+      --        For example:  mig_2_20170728002219672414 with a value of 'STARTED' 
+      --
+      -- When a child procedure finishes the very last thing it does is clean the context away.
+      -- So if we find one, then it might mean that the child procedure didn't complete 
+      -- (it might still be running in some way or Oracle has terminated it in a most brutal way)...
+      --
+      l_error_bool := FALSE;
+      IF l_tab_of_procs.COUNT > 0
+      THEN
+         FOR i IN 1 .. l_tab_of_procs.COUNT
+         LOOP
+            IF pkg_pre_etl_tools.fn_get_context_value(i_attr => l_tab_of_procs(i)) IS NOT NULL
+            THEN
+               -- Destroy the context value (because we don't want to hoover up memory).
+               pkg_pre_etl_tools.pr_destroy_context_attr(i_attr => l_tab_of_procs(i));
+               l_error_bool := TRUE;
+            END IF;
+         END LOOP;
+         --
+         IF l_error_bool
+         THEN
+            raise_application_error(-20000
+                                   ,'migration_run_framework : pr_child_processes : Some procedures didn''t complete.');
+         END IF;
+      END IF;
+   END pr_child_process;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_execute_statement
+   (
+      i_batch          IN NUMBER
+     ,i_statement      IN CLOB
+     ,i_migration_name IN VARCHAR2
+     ,i_execution_type IN VARCHAR2
+   ) IS
+      l_statement_clob       CLOB;
+      l_touch_owner          VARCHAR2(30);
+      l_touch_table          VARCHAR2(30);
+      l_fault_detection_bool BOOLEAN := FALSE;
+   BEGIN
+      IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr                      => fn_ctx_fault_detected
+                                                   ,i_fail_if_no_run_context_yn => 'Y')
+            ,'FALSE') = 'TRUE'
+      THEN
+         l_fault_detection_bool := TRUE;
+         raise_application_error(-20000, 'Fault detected.');
+      END IF;
+      l_fault_detection_bool := FALSE;
+      --
+      l_statement_clob := pkg_pre_etl_tools.fn_contextualize(i_subject => 'BEGIN ' ||
+                                                                          (CASE
+                                                                           nvl(i_execution_type
+                                                                              ,'#')
+                                                                             WHEN 'M' THEN
+                                                                              fn_no_parallel_for_session_txt
+                                                                             ELSE
+                                                                              NULL
+                                                                          END) ||
+                                                                          i_statement ||
+                                                                          ' END;'
+                                                            ,i_context => pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_run_context));
+      pr_log(i_log_type          => fn_status
+            ,i_log_entry         => 'STARTING : Running Statement For Migration : ' ||
+                                    i_migration_name
+            ,i_log_extended_info => l_statement_clob);
+      --
+      IF instr(upper(i_statement), pkg_pre_etl_tools.fn_batch) > 0
+         AND i_batch IS NOT NULL
+      THEN
+         EXECUTE IMMEDIATE l_statement_clob
+            USING i_batch;
+      ELSE
+         EXECUTE IMMEDIATE l_statement_clob;
+      END IF;
+      --
+      -- If this is a migration (non free form migration step / in other words assembled by the tool)
+      -- and if that migration step is marked as "touch" - i.e. it can touch the SOURCE to indicate
+      -- that the migration has occurred for that SOURCE row... then we need to set those status values
+      -- here.
+      IF i_execution_type = 'M'
+      THEN
+         BEGIN
+            WITH gtms AS
+             (SELECT dbms_rowid.rowid_object(row_id => gtms.rid) AS objid
+                FROM gtt_touch_migration_status gtms
+               WHERE rownum = 1)
+            SELECT do.owner
+                  ,do.object_name
+              INTO l_touch_owner
+                  ,l_touch_table
+              FROM dba_objects do
+              JOIN gtms g
+                ON (do.data_object_id = g.objid)
+             WHERE g.objid IS NOT NULL;
+         EXCEPTION
+            WHEN no_data_found THEN
+               NULL;
+         END;
+         --
+         IF l_touch_owner IS NOT NULL
+            AND l_touch_table IS NOT NULL
+         THEN
+            EXECUTE IMMEDIATE 'UPDATE ' || l_touch_owner || '.' ||
+                              l_touch_table ||
+                              ' mig_src SET mig_src.migration_status = ''M'' WHERE mig_src.rowid IN ( SELECT gtms.rid FROM GTT_TOUCH_MIGRATION_STATUS gtms )';
+         END IF;
+      END IF;
+      --
+      COMMIT;
+      --
+      pr_perform_action_instructions;
+      --
+      pr_log(i_log_type  => fn_status
+            ,i_log_entry => 'COMPLETE : Running Statement For Migration : ' ||
+                            i_migration_name);
+   EXCEPTION
+      WHEN OTHERS THEN
+         IF NOT l_fault_detection_bool
+         THEN
+            pr_log(i_log_type          => fn_error
+                  ,i_log_entry         => substr('* FAILED : Running Statement For Migration : ' ||
+                                                 i_migration_name ||
+                                                 ' : ' || SQLERRM
+                                                ,1
+                                                ,2000)
+                  ,i_log_extended_info => i_statement);
+         END IF;
+         RAISE;
+   END pr_execute_statement;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_execute_migration
+   (
+      i_batch               IN NUMBER
+     ,i_migration_group     IN VARCHAR2
+     ,i_migration_name      IN VARCHAR2
+     ,i_execution_type      IN VARCHAR2
+     ,i_task_number         IN NUMBER
+     ,i_start_at_thread     IN NUMBER
+     ,i_concurrency         IN NUMBER
+     ,i_max_rows_per_thread IN NUMBER
+     ,i_statement           IN CLOB
+     ,i_job_class_name      IN VARCHAR2
+   ) IS
+      CURSOR cur_pems
+      (
+         c_migration_group IN VARCHAR2
+        ,c_migration_name  IN VARCHAR2
+      ) IS
+         SELECT pems.use_with_on_etl_driver_yn
+               ,pemh.staged_schema
+               ,pems.table_name
+           FROM pre_etl_migration_src pems
+           JOIN pre_etl_migration_header pemh
+             ON (pemh.migration_group = pems.migration_group AND
+                pemh.migration_name = pems.migration_name)
+          WHERE pems.migration_group = c_migration_group
+            AND pems.migration_name = c_migration_name
+            AND pems.use_with_on_etl_driver_yn = 'Y';
+      cur_pems_buf cur_pems%ROWTYPE;
+      --
+      --
+   BEGIN
+      OPEN cur_pems(c_migration_group => i_migration_group
+                   ,c_migration_name  => i_migration_name);
+      FETCH cur_pems
+         INTO cur_pems_buf;
+      CLOSE cur_pems;
+      --
+      -- With Drivers the batch should have been used to set up the OED.
+      IF cur_pems_buf.use_with_on_etl_driver_yn = 'Y'
+      THEN
+         pr_child_process(i_batch           => i_batch
+                         ,i_statement       => i_statement
+                         ,i_migration_group => i_migration_group
+                         ,i_migration_name  => i_migration_name
+                         ,i_task_number     => i_task_number
+                         ,i_start_at_thread => i_start_at_thread
+                         ,i_total_threads   => round(fn_get_oed_count(i_schema_name => cur_pems_buf.staged_schema
+                                                                     ,i_table_name  => cur_pems_buf.table_name) /
+                                                     i_max_rows_per_thread)
+                         ,i_concurrency     => i_concurrency
+                         ,i_job_class_name  => i_job_class_name);
+      ELSE
+         pr_execute_statement(i_batch          => i_batch
+                             ,i_statement      => i_statement
+                             ,i_migration_name => i_migration_name
+                             ,i_execution_type => i_execution_type);
+      END IF;
+   END pr_execute_migration;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_monitor_job
+   (
+      i_batch                IN NUMBER
+     ,i_migration_group      IN VARCHAR2
+     ,i_exception_group      IN VARCHAR2
+     ,i_suppress_emails_bool IN BOOLEAN
+     ,i_halt_on_error_bool   IN BOOLEAN DEFAULT FALSE
+   ) IS
+      l_next_email_send_dev DATE := NULL;
+      l_next_email_send_man DATE := NULL;
+      --
+      l_dev_ts TIMESTAMP := to_timestamp(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_start_time)
+                                        ,'DD-MON-YYYY HH24:MI:SS.FF6');
+      l_man_ts TIMESTAMP := l_dev_ts;
+   BEGIN
+      -- This watches the master and the tasks that spring from the master.
+      pr_log(i_log_type           => fn_status
+            ,i_log_entry          => 'Monitor Job Started.'
+            ,i_log_activity_group => 'Monitor');
+      --
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_monitor_job_alive
+                                      ,i_value => 'TRUE');
+      --
+      IF pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch) IS NULL
+      THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_batch
+                                         ,i_value => to_char(i_batch));
+      END IF;
+      --
+      IF pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group) IS NULL
+      THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_group
+                                         ,i_value => i_migration_group);
+      END IF;
+      --
+      IF NOT fn_jobs_like_exists(i_job_name => fn_master_job)
+      THEN
+         IF NOT i_suppress_emails_bool
+         THEN
+            pr_generate_alert_email(i_message_heading => 'Monitor Could Not Find Master Job At Startup.'
+                                   ,i_message         => 'The master job wasn''t running at the time the monitor was started.' ||
+                                                         fn_lf ||
+                                                         '    Check dba_scheduler_job_run_details to find out why the Master Job didn''t start.'
+                                   ,i_mode            => fn_dev);
+         END IF;
+         --
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_monitor_job : The monitor could not find the Master Job at startup.');
+      END IF;
+      -- This always waits 10 seconds before it does anything (because the master needs time to get going).
+      dbms_lock.sleep(seconds => 10);
+      --
+      IF to_char(i_batch) !=
+         pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch)
+         OR
+         i_migration_group !=
+         pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : pr_monitor_job : The monitor parameters does not match the context values.');
+      END IF;
+      -- 
+      --
+      WHILE fn_jobs_like_exists(i_job_name => fn_master_job)
+      LOOP
+         IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_force_email)
+               ,'FALSE') = 'TRUE'
+         THEN
+            l_next_email_send_dev := NULL;
+            l_next_email_send_man := NULL;
+            pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_force_email
+                                            ,i_value => 'FALSE');
+         END IF;
+         --
+         IF l_next_email_send_dev IS NULL
+            OR l_next_email_send_dev <= SYSDATE
+         THEN
+            l_next_email_send_dev := SYSDATE +
+                                     (to_number(fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                            ,i_param_name      => fn_param_const_dev_cycle)) / 1440);
+            IF NOT i_suppress_emails_bool
+            THEN
+               pr_generate_email(i_mode => fn_dev, io_ts => l_dev_ts);
+            END IF;
+         END IF;
+         --
+         IF l_next_email_send_man IS NULL
+            OR l_next_email_send_man <= SYSDATE
+         THEN
+            l_next_email_send_man := SYSDATE +
+                                     (to_number(fn_get_param(i_migration_group => pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_group)
+                                                            ,i_param_name      => fn_param_const_man_cycle)) / 1440);
+            IF NOT i_suppress_emails_bool
+            THEN
+               pr_generate_email(i_mode => fn_man, io_ts => l_man_ts);
+            END IF;
+         END IF;
+         --
+         IF i_halt_on_error_bool
+            AND pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected) =
+            'TRUE'
+         THEN
+            -- exit the run loop on error.
+            EXIT;
+         END IF;
+         --
+         -- We loop for 30 itterations sleeping 1 second each time.
+         -- This is so we don't get a long gap between testing for errors, which can (if left unchecked)
+         -- for 30 seconds (i.e. we just had one long sleep) it could leave a lot of junk (failed) procedures
+         -- as a result of the auto generated code.
+         -- 
+         FOR i IN 1 .. 30
+         LOOP
+            IF i_halt_on_error_bool
+               AND pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected) =
+               'TRUE'
+            THEN
+               EXIT;
+            END IF;
+            --
+            -- Check if a step has marked as complete.  This will cause a new
+            IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_force_email)
+                  ,'FALSE') = 'TRUE'
+            THEN
+               EXIT;
+            END IF;
+            --
+            dbms_lock.sleep(seconds => 1);
+         END LOOP;
+      END LOOP;
+      --
+      -- If we are halting due to an error.
+      IF i_halt_on_error_bool
+         AND pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected) =
+         'TRUE'
+      THEN
+         IF NOT i_suppress_emails_bool
+         THEN
+            pr_generate_alert_email(i_message_heading => 'Halting on Error'
+                                   ,i_message         => 'An error occurred during the migration run.  Launched with halt on any error option.'
+                                   ,i_mode            => fn_dev);
+         END IF;
+         -- Killing the launcher will ensure that all loose child jobs are also terminated.
+         kill_launcher(i_killer            => 'Monitor'
+                      ,i_skip_monitor_bool => TRUE);
+      END IF;
+      --
+      IF fn_jobs_like_exists(i_job_name => fn_child_job)
+      THEN
+         IF NOT i_suppress_emails_bool
+         THEN
+            pr_generate_alert_email(i_message_heading => 'Orphaned Child Migration Jobs'
+                                   ,i_message         => 'The master migration job is no longer running but there are child jobs still running.' ||
+                                                         fn_lf ||
+                                                         '    The monitor will now terminate any running child processes.'
+                                   ,i_mode            => fn_dev);
+         END IF;
+         -- Killing the launcher will ensure that all loose child jobs are also terminated.
+         kill_launcher(i_killer            => 'Monitor'
+                      ,i_skip_monitor_bool => TRUE);
+      END IF;
+      --
+      IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
+            ,'FALSE') != 'TRUE'
+         AND nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+                ,'FALSE') != 'TRUE'
+      THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
+                                         ,i_value => fn_completed);
+      END IF;
+   
+      IF NOT i_suppress_emails_bool
+      THEN
+         pr_generate_email(i_mode => fn_dev, io_ts => l_dev_ts);
+         pr_generate_email(i_mode => fn_man, io_ts => l_man_ts);
+      END IF;
+      --
+      pr_log(i_log_type  => fn_status
+            ,i_log_entry => 'Monitor Job Finished Successfully.');
+      --
+      -- EXCEPTION GROUP : This starts running the exception migration group
+      IF i_exception_group IS NOT NULL
+         AND nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
+                ,'FALSE') = 'TRUE'
+         AND nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+                ,'FALSE') != 'TRUE'
+      THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_fault_detected
+                                         ,i_value => 'FALSE');
+         -- This does not run as a job (the monitor is running it).
+         pr_master_job(i_batch                => i_batch
+                      ,i_migration_group      => i_exception_group
+                      ,i_suppress_emails_bool => TRUE);
+      END IF;
+      --
+      -- Only the MONITOR should clear down the context values...
+      -- As it could be running when the master job isn't - and it needs them.
+      pr_teardown_contexts;
+   
+   EXCEPTION
+      WHEN OTHERS THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_monitor_job_alive
+                                         ,i_value => 'FALSE');
+         pr_log(i_log_type          => fn_error
+               ,i_log_entry         => 'Monitor Job failed unexpectedly.'
+               ,i_log_extended_info => SQLERRM || fn_lf ||
+                                       dbms_utility.format_error_backtrace);
+   END pr_monitor_job;
+
+   ----------------------------------------------------------------------------------------------------------------
+
+   PROCEDURE pr_master_job
+   (
+      i_batch                        IN NUMBER
+     ,i_migration_group              IN VARCHAR2
+     ,i_always_run_steps_comma_sep   IN VARCHAR2 DEFAULT NULL
+     ,i_start_at_step                IN NUMBER DEFAULT 1
+     ,i_start_at_thread              IN NUMBER DEFAULT NULL
+     ,i_stop_at_step                 IN NUMBER DEFAULT NULL
+     ,i_concurrency                  IN NUMBER DEFAULT 10
+     ,i_max_rows_per_thread          IN NUMBER DEFAULT 10000
+     ,i_suppress_emails_bool         IN BOOLEAN
+     ,i_master_monitors_monitor_bool IN BOOLEAN DEFAULT FALSE
+     ,i_job_class_name               IN VARCHAR2 DEFAULT 'DEFAULT_JOB_CLASS'
+   ) IS
+      l_master_started_at DATE := SYSDATE;
+      l_start_at_thread   NUMBER := NULL;
+      --
+      CURSOR cur_pemh
+      (
+         c_migration_group            IN VARCHAR2
+        ,c_start_at_step              IN NUMBER
+        ,c_stop_at_step               IN NUMBER
+        ,c_always_run_steps_comma_sep IN VARCHAR2
+      ) IS
+         SELECT *
+           FROM (SELECT 1 AS master_order
+                       ,pemh.*
+                   FROM pre_etl_migration_header pemh
+                  WHERE pemh.migration_group = c_migration_group
+                    AND pemh.order_of_exec IN
+                        (SELECT regexp_substr(c_always_run_steps_comma_sep
+                                             ,'[^,]+'
+                                             ,1
+                                             ,rownum)
+                           FROM dual
+                         CONNECT BY LEVEL <=
+                                    regexp_count(c_always_run_steps_comma_sep
+                                                ,'[^,]+'))
+                 UNION ALL
+                 SELECT 2 AS master_order
+                       ,pemh.*
+                   FROM pre_etl_migration_header pemh
+                  WHERE pemh.migration_group = c_migration_group
+                    AND pemh.order_of_exec >= c_start_at_step
+                    AND pemh.order_of_exec <=
+                        nvl(c_stop_at_step, 9999999999))
+          ORDER BY master_order
+                  ,order_of_exec;
+   
+      l_launch_info VARCHAR2(2000) := NULL;
+   BEGIN
+      -- This is being set again (because we might be restarting after a DB outage.
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_running
+                                      ,i_value => 'TRUE');
+      --
+      --
+      IF TRIM(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_start_time)) IS NULL
+      THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_start_time
+                                         ,i_value => to_char(systimestamp()
+                                                            ,'DD-MON-YYYY HH24:MI:SS.FF6'));
+      END IF;
+      --                                                                    
+      l_launch_info := l_launch_info || 'Batch                  :' ||
+                       pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_migration_batch
+                                                                    ,i_value => to_char(i_batch)) ||
+                       fn_lf;
+      l_launch_info := l_launch_info || 'Migration Group        :' ||
+                       pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_migration_group
+                                                                    ,i_value => i_migration_group) ||
+                       fn_lf;
+      l_launch_info := l_launch_info || 'Starting at step       :' ||
+                       pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_start_at_step
+                                                                    ,i_value => i_start_at_step) ||
+                       fn_lf;
+      IF i_start_at_thread IS NOT NULL
+      THEN
+         l_launch_info := l_launch_info || 'Starting at thread     :' ||
+                          pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_start_at_thread
+                                                                       ,i_value => i_start_at_thread) ||
+                          fn_lf;
+      END IF;
+      l_launch_info := l_launch_info || 'Stopping at step       :' ||
+                       nvl(pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_stop_at_step
+                                                                        ,i_value => i_stop_at_step)
+                          ,'N/A - UNTIL ALL STEPS ARE RUN') || fn_lf;
+      l_launch_info := l_launch_info || 'Concurrency            :' ||
+                       pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_concurrency
+                                                                    ,i_value => i_concurrency) ||
+                       fn_lf;
+      l_launch_info := l_launch_info || 'Max Rows Per Thread    :' ||
+                       pkg_pre_etl_tools.fn_set_context_and_passthru(i_attr  => fn_ctx_rows_per_thread
+                                                                    ,i_value => i_max_rows_per_thread) ||
+                       fn_lf;
+      l_launch_info := l_launch_info || 'Suppressing Emails     :' ||
+                       (CASE i_suppress_emails_bool
+                          WHEN TRUE THEN
+                           'TRUE'
+                          ELSE
+                           'FALSE'
+                       END) || fn_lf;
+      -- Log the parameters used to make this run.
+      pr_log(i_log_type           => fn_status
+            ,i_log_entry          => 'Master Job Started.'
+            ,i_log_extended_info  => l_launch_info
+            ,i_log_activity_group => '##STARTING##');
+   
+      -- Loop through the steps and execute them.
+      FOR cur_pemh_buf IN cur_pemh(c_migration_group            => i_migration_group
+                                  ,c_start_at_step              => i_start_at_step
+                                  ,c_stop_at_step               => i_stop_at_step
+                                  ,c_always_run_steps_comma_sep => i_always_run_steps_comma_sep)
+      LOOP
+         IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+               ,'FALSE') = 'TRUE'
+         THEN
+            EXIT;
+         END IF;
+         --
+         -- Set the step name.
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
+                                         ,i_value => cur_pemh_buf.migration_name);
+         --
+         IF cur_pemh_buf.header_type = 'P'
+         THEN
+            pr_execute_statement(i_batch          => i_batch
+                                ,i_statement      => cur_pemh_buf.executable_statement
+                                ,i_migration_name => cur_pemh_buf.migration_name
+                                ,i_execution_type => cur_pemh_buf.header_type);
+         ELSIF cur_pemh_buf.header_type = 'M'
+         THEN
+            IF cur_pemh_buf.master_order = 2
+               AND i_start_at_step = cur_pemh_buf.order_of_exec
+               AND i_start_at_thread IS NOT NULL
+            THEN
+               l_start_at_thread := i_start_at_thread;
+            ELSE
+               l_start_at_thread := NULL;
+            END IF;
+         
+            pr_execute_migration(i_batch               => i_batch
+                                ,i_migration_group     => cur_pemh_buf.migration_group
+                                ,i_migration_name      => cur_pemh_buf.migration_name
+                                ,i_execution_type      => cur_pemh_buf.header_type
+                                ,i_task_number         => cur_pemh_buf.order_of_exec
+                                ,i_start_at_thread     => l_start_at_thread
+                                ,i_concurrency         => i_concurrency
+                                ,i_max_rows_per_thread => i_max_rows_per_thread
+                                ,i_statement           => cur_pemh_buf.executable_statement
+                                ,i_job_class_name      => i_job_class_name);
+         END IF;
+         --
+         -- check for monitor job if required.
+         -- Only check if the master has been running for 30 seconds,
+         -- or the monitor has registered as alive.
+         IF i_master_monitors_monitor_bool
+            AND (SYSDATE > l_master_started_at + (30 / 86400) OR
+            nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_monitor_job_alive)
+                    ,'FALSE') = 'TRUE')
+            AND NOT fn_jobs_like_exists(i_job_name => fn_monitor_job)
+         THEN
+            pr_log(i_log_type  => fn_error
+                  ,i_log_entry => 'Monitor Job Not Running.');
+            EXIT;
+         END IF;
+      END LOOP;
+      --
+      --
+      IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
+            ,'FALSE') = 'TRUE'
+      THEN
+         pr_log(i_log_type  => fn_status
+               ,i_log_entry => 'Master Job Finished : Errors occurred during the run.');
+      ELSIF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
+               ,'FALSE') = 'TRUE'
+      THEN
+         pr_log(i_log_type  => fn_status
+               ,i_log_entry => 'Master Job Killed : See log for more information.');
+      ELSE
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
+                                         ,i_value => fn_completed);
+         pr_log(i_log_type  => fn_status
+               ,i_log_entry => 'Master Job Finished Successfully.');
+      END IF;
+   EXCEPTION
+      WHEN OTHERS THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
+                                         ,i_value => fn_failed);
+         pr_log(i_log_type          => fn_error
+               ,i_log_entry         => 'Master Job failed unexpectedly.'
+               ,i_log_extended_info => SQLERRM);
+   END pr_master_job;
+
+   --------------------------------------------------------------------------------------------------------
+   PROCEDURE launch
+   (
+      i_batch                        IN NUMBER
+     ,i_migration_group              IN VARCHAR2
+     ,i_exception_group              IN VARCHAR2 DEFAULT NULL
+     ,i_context                      IN VARCHAR2
+     ,i_always_run_steps_comma_sep   IN VARCHAR2 DEFAULT NULL
+     ,i_start_at_step                IN NUMBER DEFAULT 1
+     ,i_start_at_thread              IN NUMBER DEFAULT NULL
+     ,i_stop_at_step                 IN NUMBER DEFAULT NULL
+     ,i_concurrency                  IN NUMBER DEFAULT 10
+     ,i_max_rows_per_thread          IN NUMBER DEFAULT 10000
+     ,i_suppress_emails_bool         IN BOOLEAN
+     ,i_halt_on_error_bool           IN BOOLEAN
+     ,i_master_monitors_monitor_bool IN BOOLEAN
+     ,i_external_context_controller  IN VARCHAR2
+     ,i_job_class_name               IN VARCHAR2 DEFAULT 'DEFAULT_JOB_CLASS'
+   ) IS
+      l_master_job_block  VARCHAR2(4000);
+      l_monitor_job_block VARCHAR2(4000);
+      l_lockhandle        VARCHAR2(200);
+      l_start_ts          TIMESTAMP := systimestamp();
+   BEGIN
+      IF pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_running) =
+         'TRUE'
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : A migration is already running.  There can be only one.');
+      END IF;
+      --
+      -- Validate Params Before Launching Anything.
+      IF i_batch IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_batch must not be NULL.');
+      END IF;
+      --
+      IF NOT
+          fn_is_valid_migration_group(i_migration_group => i_migration_group)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_migration_group value not recognised.');
+      END IF;
+      --
+      IF i_exception_group IS NOT NULL
+         AND NOT
+          fn_is_valid_migration_group(i_migration_group => i_exception_group)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_exception_group value not recognised.');
+      END IF;
+      --
+      IF i_exception_group IS NOT NULL
+         AND nvl(i_halt_on_error_bool, FALSE) = FALSE
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_exception_group can only be used if i_halt_on_error_bool is TRUE.');
+      
+      END IF;
+      --
+      IF NOT fn_is_valid_context(i_context => i_context)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_context value not recognised.');
+      END IF;
+      --
+      IF i_start_at_step IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_start_at_step must not be NULL.');
+      END IF;
+      --
+      IF i_concurrency IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_concurrency must not be NULL.');
+      END IF;
+      --
+      IF i_max_rows_per_thread IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_max_rows_per_thread must not be NULL.');
+      END IF;
+      --
+      IF (NOT
+          fn_is_valid_job_class(i_job_class_name => i_job_class_name))
+         OR i_job_class_name IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_job_class_name is not recognised.');
+      
+      END IF;
+      --
+      IF i_start_at_thread IS NOT NULL
+         AND i_start_at_step IS NULL
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_start_at_thread can only be used when specifying a i_start_at_step.');
+      END IF;
+      --
+      IF i_start_at_thread IS NOT NULL
+         AND NOT
+          fn_is_threaded_mig(i_migration_group => i_migration_group
+                                ,i_step            => i_start_at_step)
+      THEN
+         raise_application_error(-20000
+                                ,'migration_run_framework : launch : i_start_at_thread can only be used for steps that are threaded (use the driver).');
+      END IF;
+      --
+      pr_teardown_contexts;
+      --
+      -- Setup external contexts.
+      --   Sometimes you will want to control the behaviour of a migration run
+      --   based on the setting of an external context.
+      --   For example you may which to truncate a target before migrating to it, or
+      --   you might want to try to keep the target data and add to it.  Rather than 
+      --   changing the migration for each run case, use this to set a context value up.
+      --   Example: TRUNC_TARGET=TRUE;COMPARISON=TRUE  etc... note that context setups are 
+      --   delimited by semi-colon.  You can then check for these contexts in your steps.
+      --   Example:-
+      --   
+      --         IF pkg_pre_etl_tools.fn_get_context_value (i_attr => 'TRUNC_TARGET') = 'TRUE' THEN
+      --            execute immediate 'truncate table target_schema.xyx';
+      --         END IF;
+   
+      FOR i_buf IN (SELECT *
+                      FROM (SELECT substr(context_name_value
+                                         ,1
+                                         ,instr(context_name_value, '=') - 1) AS context_name
+                                  ,substr(context_name_value
+                                         ,instr(context_name_value
+                                               ,'=') + 1) AS context_value
+                              FROM (SELECT regexp_substr(i_external_context_controller
+                                                        ,'[^;]+'
+                                                        ,1
+                                                        ,rownum) AS context_name_value
+                                      FROM dual
+                                    CONNECT BY LEVEL <=
+                                               regexp_count(i_external_context_controller
+                                                           ,'[^;]+')))
+                     WHERE context_name IS NOT NULL)
+      LOOP
+         pkg_pre_etl_tools.pr_set_context(i_attr  => i_buf.context_name
+                                         ,i_value => i_buf.context_value);
+      END LOOP;
+      --
+      --
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_running
+                                      ,i_value => 'TRUE');
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_migration_start_time
+                                      ,i_value => to_char(l_start_ts
+                                                         ,'DD-MON-YYYY HH24:MI:SS.FF6'));
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_run_context
+                                      ,i_value => i_context);
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_job_class
+                                      ,i_value => i_job_class_name);
+      -- Concurrency control around registering, and deregistering of dbms_parallel_execute tasks and managed jobs.                                
+      dbms_lock.allocate_unique('mig_lock:' || systimestamp
+                               ,l_lockhandle);
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_lock_handle
+                                      ,i_value => l_lockhandle);
+      -- Set the force email (Typically used to initiate an email at request of the runstep) to FALSE.                                
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_force_email
+                                      ,i_value => 'FALSE');
+      --
+      l_master_job_block := 'BEGIN ' || fn_lf ||
+                            '   migration_run_framework.pr_master_job(i_batch =>' ||
+                            to_char(i_batch) || fn_lf ||
+                            '                                       , i_migration_group              => ' ||
+                            chr(39) || i_migration_group || chr(39) ||
+                            fn_lf || (CASE nvl(i_always_run_steps_comma_sep
+                                ,'##NULL##')
+                               WHEN '##NULL##' THEN
+                                NULL
+                               ELSE
+                                '                                       , i_always_run_steps_comma_sep   => ' ||
+                                chr(39) ||
+                                i_always_run_steps_comma_sep ||
+                                chr(39) || fn_lf
+                            END) ||
+                            '                                       , i_start_at_step                => ' ||
+                            i_start_at_step || fn_lf ||
+                            (CASE nvl(i_start_at_thread, 9999999999)
+                               WHEN 9999999999 THEN
+                                NULL
+                               ELSE
+                                '                                       , i_start_at_thread              => ' ||
+                                i_start_at_thread || fn_lf
+                            END) ||
+                            (CASE nvl(i_stop_at_step, 9999999999)
+                               WHEN 9999999999 THEN
+                                NULL
+                               ELSE
+                                '                                       , i_stop_at_step                 => ' ||
+                                i_stop_at_step || fn_lf
+                            END) ||
+                            '                                       , i_concurrency                  => ' ||
+                            i_concurrency || fn_lf ||
+                            '                                       , i_max_rows_per_thread          => ' ||
+                            i_max_rows_per_thread || fn_lf ||
+                            '                                       , i_suppress_emails_bool         => ' ||
+                            (CASE nvl(i_suppress_emails_bool, FALSE)
+                               WHEN TRUE THEN
+                                'TRUE'
+                               ELSE
+                                'FALSE'
+                            END) || fn_lf ||
+                            '                                       , i_master_monitors_monitor_bool => ' ||
+                            (CASE nvl(i_master_monitors_monitor_bool
+                                ,FALSE)
+                               WHEN TRUE THEN
+                                'TRUE'
+                               ELSE
+                                'FALSE'
+                            END) || fn_lf ||
+                            '                                       , i_job_class_name               => ' ||
+                            chr(39) || i_job_class_name || chr(39) ||
+                            fn_lf ||
+                            '                                        );' ||
+                            fn_lf || 'END;';
+      --
+      l_monitor_job_block := 'BEGIN ' || fn_lf ||
+                             '   migration_run_framework.pr_monitor_job(i_batch =>' ||
+                             to_char(i_batch) || fn_lf ||
+                             '                                       , i_migration_group      => ' ||
+                             chr(39) || i_migration_group || chr(39) ||
+                             fn_lf ||
+                             '                                       , i_exception_group      => ' ||
+                             chr(39) || i_exception_group || chr(39) ||
+                             fn_lf ||
+                             '                                       , i_suppress_emails_bool => ' ||
+                             (CASE nvl(i_suppress_emails_bool, FALSE)
+                                WHEN TRUE THEN
+                                 'TRUE'
+                                ELSE
+                                 'FALSE'
+                             END) || fn_lf ||
+                             '                                       , i_halt_on_error_bool   => ' ||
+                             (CASE nvl(i_halt_on_error_bool, FALSE)
+                                WHEN TRUE THEN
+                                 'TRUE'
+                                ELSE
+                                 'FALSE'
+                             END) || fn_lf ||
+                             '                                        );' ||
+                             fn_lf || 'END;';
+   
+      --
+      pr_log(i_log_type           => fn_info
+            ,i_log_entry          => USER ||
+                                     ' launched master migration job for : ' ||
+                                     i_migration_group
+            ,i_log_extended_info  => 'Running...' || fn_lf(2) ||
+                                     l_master_job_block
+            ,i_log_activity_group => '##STARTING##');
+      --
+      dbms_scheduler.create_job(job_name   => fn_master_job
+                               ,job_class  => (CASE i_job_class_name
+                                                 WHEN 'FIXED INSTANCE' THEN
+                                                  'DEFAULT_JOB_CLASS'
+                                                 ELSE
+                                                  i_job_class_name
+                                              END)
+                               ,job_type   => 'PLSQL_BLOCK'
+                               ,job_action => l_master_job_block
+                               ,enabled    => TRUE
+                               ,auto_drop  => TRUE);
+      --
+      pr_log(i_log_type           => fn_info
+            ,i_log_entry          => USER ||
+                                     ' launched monitor migration job for : ' ||
+                                     i_migration_group
+            ,i_log_extended_info  => 'Running...' || fn_lf(2) ||
+                                     l_monitor_job_block
+            ,i_log_activity_group => '##STARTING##');
+      --
+      dbms_scheduler.create_job(job_name   => fn_monitor_job
+                               ,job_class  => (CASE i_job_class_name
+                                                 WHEN 'FIXED INSTANCE' THEN
+                                                  'DEFAULT_JOB_CLASS'
+                                                 ELSE
+                                                  i_job_class_name
+                                              END)
+                               ,job_type   => 'PLSQL_BLOCK'
+                               ,job_action => l_monitor_job_block
+                               ,enabled    => TRUE
+                               ,auto_drop  => TRUE);
+      COMMIT;
+   
+   END launch;
+
+   /*------------------------------------------------------------------------------------
+   ** Kills the Launcher and anything associated to the launch.. scheduler jobs, threads etc...
+   **
+   **
+   */
+   PROCEDURE kill_launcher
+   (
+      i_killer            IN VARCHAR2 DEFAULT NULL
+     ,i_skip_monitor_bool BOOLEAN DEFAULT FALSE
+   ) IS
+      l_task_list        VARCHAR2(32767) := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_task_list);
+      l_managed_job_list VARCHAR2(32767) := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_job_list);
+   
+      PROCEDURE kill_job
+      (
+         i_job_name IN VARCHAR2
+        ,i_message  IN VARCHAR2
+      ) IS
+         ex_job_not_found EXCEPTION;
+         PRAGMA EXCEPTION_INIT(ex_job_not_found, -27475);
+      BEGIN
+         dbms_scheduler.drop_job(job_name => i_job_name
+                                ,force    => TRUE);
+         pr_log(i_log_type => fn_info, i_log_entry => i_message);
+      EXCEPTION
+         -- Don't throw an error if we get "ORA-27475 Must be a job."
+         WHEN ex_job_not_found THEN
+            NULL;
+      END kill_job;
+   BEGIN
+      --
+      pr_log(i_log_type  => fn_info
+            ,i_log_entry => i_killer || (CASE nvl(i_killer, '#NULL#')
+                               WHEN '#NULL#' THEN
+                                NULL
+                               ELSE
+                                ' - '
+                            END) ||
+                            'Killing launched jobs and threads.');
+   
+      -- Stop any DBMS_PARALLEL_EXECUTE jobs/tasks (in case any have been launched from PRE_ETL_OWNER).
+      -- ONLY registered tasks will be stopped.
+      --
+      -- To register a task    : migration_run_framework.pr_register_parallel_task(i_task_name => '<YOUR_TASK_NAME>' );
+      -- To de-register a task : migration_run_framework.pr_deregister_parallel_task(i_task_name => '<YOUR_TASK_NAME>' );
+      --
+      FOR i_buf IN (SELECT dpet.*
+                      FROM dba_parallel_execute_tasks dpet
+                      JOIN (SELECT *
+                             FROM (SELECT regexp_substr(l_task_list
+                                                       ,'[^*]+'
+                                                       ,1
+                                                       ,rownum) AS task_name
+                                     FROM dual
+                                   CONNECT BY LEVEL <=
+                                              regexp_count(l_task_list
+                                                          ,'[^*]+'))
+                            WHERE task_name IS NOT NULL) tasks
+                        ON (upper(tasks.task_name) =
+                           upper(dpet.task_name))
+                     WHERE dpet.task_owner = 'PRE_ETL_OWNER')
+      LOOP
+         BEGIN
+            dbms_parallel_execute.stop_task(task_name => i_buf.task_name);
+         EXCEPTION
+            WHEN OTHERS THEN
+               NULL;
+         END;
+         BEGIN
+            dbms_parallel_execute.drop_task(task_name => i_buf.task_name);
+         EXCEPTION
+            WHEN OTHERS THEN
+               NULL;
+         END;
+      END LOOP;
+   
+      -- Stop any USER_SCHEDULER_JOBS (in case any have been launched from PRE_ETL_OWNER as managed jobs)
+      -- ONLY registered jobs will be stopped.
+      --
+      -- To register a managed job    : migration_run_framework.pr_register_managed_job(i_job_name => '<YOUR_JOB_NAME>' );
+      -- To de-register a managed job : migration_run_framework.pr_deregister_managed_job(i_job_name => '<YOUR_JOB_NAME>' );
+      -- Also :
+      --        pr_start_managed_job (registers jobs as they start, and when the jobs end they de-register themselves).
+      --
+      FOR i_buf IN (SELECT usj.*
+                      FROM user_scheduler_jobs usj
+                      JOIN (SELECT *
+                             FROM (SELECT regexp_substr(l_managed_job_list
+                                                       ,'[^*]+'
+                                                       ,1
+                                                       ,rownum) AS job_name
+                                     FROM dual
+                                   CONNECT BY LEVEL <=
+                                              regexp_count(l_managed_job_list
+                                                          ,'[^*]+'))
+                            WHERE job_name IS NOT NULL) jobs
+                        ON (upper(jobs.job_name) = upper(usj.job_name)))
+      LOOP
+         kill_job(i_job_name => i_buf.job_name
+                 ,i_message  => 'Killed : ' || i_buf.job_name ||
+                                ' - A "Managed Job" launched by user defined migration step.');
+      END LOOP;
+      --
+      --
+      pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_kill_detected
+                                      ,i_value => 'TRUE');
+      --
+      -- We need to loop because we need to kill the child tasks before the master
+      -- and the master may have made more in the intervening time.
+      FOR i IN 1 .. 2
+      LOOP
+         -- Child tasks first.
+         FOR i_buf IN (SELECT usj.job_name
+                         FROM user_scheduler_jobs usj
+                        WHERE job_name LIKE
+                              '%' || 'MIG/_TASK/_' || '%' ESCAPE '/')
+         LOOP
+            kill_job(i_job_name => i_buf.job_name
+                    ,i_message  => 'Killed : ' || i_buf.job_name);
+         END LOOP;
+         --
+         --
+         IF NOT i_skip_monitor_bool
+         THEN
+            kill_job(i_job_name => fn_monitor_job
+                    ,i_message  => 'Killed : ' || fn_monitor_job);
+         END IF;
+         --
+         --
+         kill_job(i_job_name => fn_master_job
+                 ,i_message  => 'Killed : ' || fn_master_job);
+      
+      END LOOP;
+      --
+      pr_perform_action_instructions;
+      --
+      IF pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_migration_batch) IS NOT NULL
+      THEN
+         pr_generate_alert_email(i_message_heading => 'Migration Killed'
+                                ,i_message         => 'User : ' || USER ||
+                                                      ' has killed the processes handling the migration.'
+                                ,i_mode            => fn_dev);
+      END IF;
+      pr_log(i_log_type  => fn_info
+            ,i_log_entry => 'Jobs and threads Killed.');
+      --
+      IF upper(nvl(i_killer, '#')) != 'MONITOR'
+      THEN
+         pr_teardown_contexts;
+      END IF;
+      --
+      pr_clear_instructions;
+      --
+      --
+   END kill_launcher;
+
+END migration_run_framework;
+/

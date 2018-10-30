@@ -1,0 +1,617 @@
+CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_utilities IS
+
+   /*=================================================================================================
+       Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
+       
+       Developed by Christian Leigh
+
+       Copyright 2018 IHS Markit
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+     =================================================================================================  
+   */
+          
+   TYPE t_ctx_buffer_rec IS RECORD(
+       mon_step       VARCHAR2(500)
+      ,mon_context    VARCHAR2(500)
+      ,mon_aspect     VARCHAR2(500)
+      ,mon_start_time NUMBER
+      ,mon_processed  NUMBER
+      ,mon_min_time   NUMBER
+      ,mon_max_time   NUMBER
+      ,mon_total_time NUMBER);
+
+   -- Any write we'd do to a context goes through this buffer first.  
+   -- All writes to the context must be serialised and performed at the end of each thread.
+   -- An explict call to update contexts must be made when the threads complete, or at some
+   -- defined point.
+   TYPE t_ctx_buffer_tab IS TABLE OF t_ctx_buffer_rec INDEX BY VARCHAR2(32);
+   g_ctx_buffer_tab t_ctx_buffer_tab;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_get_param(i_param_name IN VARCHAR2) RETURN VARCHAR2 result_cache IS
+      l_return pre_etl_params.param_value%TYPE;
+   BEGIN
+      SELECT pep.param_value
+        INTO l_return
+        FROM pre_etl_params pep
+       WHERE pep.param_name = i_param_name;
+      RETURN l_return;
+   EXCEPTION
+      WHEN no_data_found THEN
+         RETURN NULL;
+   END fn_get_param;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_const_the_unset_min RETURN NUMBER result_cache IS
+   BEGIN
+      RETURN 9999999999;
+   END fn_const_the_unset_min;
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_const_prefix RETURN VARCHAR2 result_cache IS
+   BEGIN
+      RETURN 'INTRO';
+   END fn_const_prefix;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_const_use_error RETURN VARCHAR2 result_cache IS
+   BEGIN
+      -- TRY TO USE NO MORE THAN 10 CHARS
+      RETURN '_USAGE_ERR';
+   END fn_const_use_error;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_const_merge_clash RETURN VARCHAR2 result_cache IS
+   BEGIN
+      -- TRY TO USE NO MORE THAN 10 CHARS
+      RETURN '_MRG_CLASH';
+   END fn_const_merge_clash;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_make_hash(i_value IN VARCHAR2) RETURN VARCHAR2 IS
+   BEGIN
+      RETURN to_char(dbms_crypto.hash(to_clob(i_value)
+                                     ,to_number(dbms_crypto.hash_md5)));
+   
+   END fn_make_hash;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_find_or_create
+   (
+      i_introspect_step        IN VARCHAR2
+     ,i_introspect_context     IN VARCHAR2
+     ,i_aspect_being_monitored IN VARCHAR2
+   ) RETURN VARCHAR2 IS
+      l_return       VARCHAR2(32);
+      l_hash_to_find VARCHAR2(32) := fn_make_hash(i_value => i_introspect_step || '/' ||
+                                                             i_introspect_context || '/' ||
+                                                             i_aspect_being_monitored);
+   BEGIN
+      IF g_ctx_buffer_tab.EXISTS(l_hash_to_find)
+      THEN
+         l_return := l_hash_to_find;
+      ELSE
+         g_ctx_buffer_tab(l_hash_to_find).mon_step := i_introspect_step;
+         g_ctx_buffer_tab(l_hash_to_find).mon_context := i_introspect_context;
+         g_ctx_buffer_tab(l_hash_to_find).mon_aspect := i_aspect_being_monitored;
+         g_ctx_buffer_tab(l_hash_to_find).mon_start_time := NULL;
+         g_ctx_buffer_tab(l_hash_to_find).mon_processed := 0;
+         g_ctx_buffer_tab(l_hash_to_find).mon_min_time := fn_const_the_unset_min;
+         g_ctx_buffer_tab(l_hash_to_find).mon_max_time := 0;
+         g_ctx_buffer_tab(l_hash_to_find).mon_total_time := 0;
+         l_return := l_hash_to_find;
+      END IF;
+      --
+      RETURN l_return;
+   
+   END fn_find_or_create;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_add_to_introspection
+   (
+      i_hash       IN VARCHAR2
+     ,i_time_in_cs IN NUMBER
+   ) IS
+   BEGIN
+      g_ctx_buffer_tab(i_hash).mon_processed := g_ctx_buffer_tab(i_hash)
+                                                .mon_processed + 1;
+      --
+      IF g_ctx_buffer_tab(i_hash).mon_min_time > i_time_in_cs
+      THEN
+         g_ctx_buffer_tab(i_hash).mon_min_time := i_time_in_cs;
+      END IF;
+      --
+      IF g_ctx_buffer_tab(i_hash).mon_max_time < i_time_in_cs
+      THEN
+         g_ctx_buffer_tab(i_hash).mon_max_time := i_time_in_cs;
+      END IF;
+      --
+      g_ctx_buffer_tab(i_hash).mon_total_time := g_ctx_buffer_tab(i_hash)
+                                                 .mon_total_time +
+                                                  i_time_in_cs;
+   
+      -- Reset for next use...
+      g_ctx_buffer_tab(i_hash).mon_start_time := NULL;
+   
+   END pr_add_to_introspection;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_introspect_monitoring
+   (
+      i_introspect_step        IN VARCHAR2
+     ,i_introspect_context     IN VARCHAR2
+     ,i_aspect_being_monitored IN VARCHAR2
+     ,i_mode                   IN VARCHAR2
+   ) IS
+      l_existing_or_new_hash VARCHAR2(32);
+      l_start_time           NUMBER;
+      l_end_time             NUMBER;
+      l_time_taken           NUMBER;
+   BEGIN
+      ----------------------------------------------------------------------------
+      --
+      -- NOTE: THIS PERFORMS ** NO ** INTROSPECTION MONTITORING IF THE
+      --       PRE_ETL_PARAM is OFF.
+      -- 
+      --
+      -- i_introspect_step          The step being processed thats being introspected.
+      --                            For example the migration step.
+      -- 
+      -- i_introspect_context       This is a way of allowing users to specify the 
+      --                            context of what they are monitoring... 
+      --                            In the case of PRE_ETL this will be the name of
+      --                            the document or fragment being constructed. 
+      --
+      -- i_aspect_being_monitored   What are we monitoring?  Defined by the user.
+      --                            The user of this routine will wrap whatever 
+      --                            it is they want to monitor between a start and 
+      --                            end call.
+      --
+      -- i_mode                     START or END only.
+      --
+      ----------------------------------------------------------------------------
+      IF fn_get_param(i_param_name => 'INTROSPECTION') = 'ON'
+      THEN
+         IF i_mode NOT IN ('START', 'END')
+         THEN
+            raise_application_error(-20000
+                                   ,'pkg_pre_etl_utilities.pr_introspect_monitoring : i_mode not recognised. (' ||
+                                    i_mode || ')');
+         
+         END IF;
+         --
+         -- Look for the hash of the i_introspect_step/i_introspect_context/i_aspect_being_monitored
+         -- If we find it, then we have already have monitoring stats for this.
+         -- If we don't find it then we need to create some context variables to store the long term stats.
+         --
+         l_existing_or_new_hash := fn_find_or_create(i_introspect_step        => i_introspect_step
+                                                    ,i_introspect_context     => i_introspect_context
+                                                    ,i_aspect_being_monitored => i_aspect_being_monitored);
+         --
+         IF l_existing_or_new_hash IS NOT NULL
+         THEN
+            l_start_time := g_ctx_buffer_tab(l_existing_or_new_hash)
+                            .mon_start_time;
+         
+            IF (i_mode = 'END' AND l_start_time IS NULL)
+               OR (i_mode = 'START' AND l_start_time IS NOT NULL)
+            THEN
+               -- Setup a context that shows who is using the monitoring incorrectly.
+               pkg_pre_etl_tools.pr_set_context(i_attr  => fn_const_prefix ||
+                                                           fn_const_use_error
+                                               ,i_value => 'Error in usage for : ' ||
+                                                           i_mode ||
+                                                           ' / ' ||
+                                                           i_introspect_step ||
+                                                           ' / ' ||
+                                                           i_introspect_context ||
+                                                           ' / ' ||
+                                                           i_aspect_being_monitored);
+            ELSIF i_mode = 'START'
+            THEN
+               g_ctx_buffer_tab(l_existing_or_new_hash).mon_start_time := dbms_utility.get_time;
+            ELSIF i_mode = 'END'
+            THEN
+               l_end_time   := dbms_utility.get_time;
+               l_time_taken := (l_end_time - l_start_time);
+               IF abs(l_time_taken) < 31536000 /* if more than a year! - then we've probably rolled round.. ignore this stat */
+               THEN
+                  pr_add_to_introspection(i_hash       => l_existing_or_new_hash
+                                         ,i_time_in_cs => l_time_taken);
+               ELSE
+                  -- If we have rolled round.. then reset the start.
+                  g_ctx_buffer_tab(l_existing_or_new_hash).mon_start_time := NULL;
+               END IF;
+            END IF;
+         END IF;
+      END IF;
+   END pr_introspect_monitoring;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_create_intro_table IS
+      ex_already_exists EXCEPTION;
+      PRAGMA EXCEPTION_INIT(ex_already_exists, -955);
+   BEGIN
+      EXECUTE IMMEDIATE q'[CREATE TABLE pre_etl_introspection (monitored_step    VARCHAR2(500)
+                                                                ,monitored_context  VARCHAR2(500)
+                                                                ,monitored_aspect   VARCHAR2(500)
+                                                                ,processed_count    NUMBER
+                                                                ,min_time_secs      NUMBER (10,2)
+                                                                ,max_time_secs      NUMBER (10,2)
+                                                                ,avg_time_secs      NUMBER (10,2)
+                                                                ,total_time_secs    NUMBER (10,2) 
+                                                                ,primary key ( monitored_step
+                                                                             , monitored_context
+                                                                             , monitored_aspect) )]';
+   EXCEPTION
+      WHEN ex_already_exists THEN
+         NULL;
+   END pr_create_intro_table;
+
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_dump_introspection_stats IS
+      l_hash              VARCHAR2(32);
+      l_sql               VARCHAR2(32000);
+      l_failed_merge_bool BOOLEAN;
+      PRAGMA AUTONOMOUS_TRANSACTION;
+   BEGIN
+      IF fn_get_param(i_param_name => 'INTROSPECTION') = 'ON'
+      THEN
+         l_hash := g_ctx_buffer_tab.FIRST;
+         WHILE l_hash IS NOT NULL
+         LOOP
+         
+                                                -- NoFormat Start
+                                                
+                                                l_sql := q'[MERGE INTO pre_etl_introspection pei
+USING (SELECT :mon_step     as mon_step
+            , :mon_context  as mon_context
+            , :mon_aspect   as mon_aspect
+         FROM dual) ms
+ON  (pei.monitored_step    = ms.mon_step
+AND  pei.monitored_context = ms.mon_context
+AND  pei.monitored_aspect  = ms.mon_aspect)
+WHEN MATCHED THEN
+   UPDATE  
+      SET pei.processed_count  = pei.processed_count + ]'||g_ctx_buffer_tab(l_hash).mon_processed||chr(10)||rpad(' ',43,' ')||
+                                                                                                                                             ',pei.min_time_secs    = least(pei.min_time_secs,'||g_ctx_buffer_tab(l_hash).mon_min_time/100||')'||chr(10)||rpad(' ',43,' ')||
+                                                                                                                                             ',pei.max_time_secs    = greatest(pei.max_time_secs,'||g_ctx_buffer_tab(l_hash).mon_max_time/100||')'||chr(10)||rpad(' ',43,' ')||
+                                                                                                                                             ',pei.avg_time_secs    = (pei.total_time_secs+'||(g_ctx_buffer_tab(l_hash).mon_total_time/100)||') / ( pei.processed_count+'||g_ctx_buffer_tab(l_hash).mon_processed||')'||chr(10)||rpad(' ',43,' ')||
+                                                                                                                                             ',pei.total_time_secs  = (pei.total_time_secs+'||(g_ctx_buffer_tab(l_hash).mon_total_time/100)||')'||chr(10)||rpad(' ',33,' ')||
+                                                                                                                                  q'[WHEN NOT MATCHED THEN
+   INSERT (monitored_step
+          ,monitored_context
+          ,monitored_aspect
+          ,processed_count
+          ,min_time_secs
+          ,max_time_secs   
+          ,avg_time_secs   
+          ,total_time_secs)
+VALUES (]'||chr(39)||g_ctx_buffer_tab(l_hash).mon_step||chr(39)||
+                                                                                  ','||chr(39)||g_ctx_buffer_tab(l_hash).mon_context||chr(39)||     
+                                                                                  ','||chr(39)||g_ctx_buffer_tab(l_hash).mon_aspect||chr(39)||  
+                                                                                  ','||g_ctx_buffer_tab(l_hash).mon_processed||
+                                                                                  ','||(g_ctx_buffer_tab(l_hash).mon_min_time/100)||
+                                                                                  ','||(g_ctx_buffer_tab(l_hash).mon_max_time/100)||   
+                                                                                  ','||((g_ctx_buffer_tab(l_hash).mon_total_time/greatest(g_ctx_buffer_tab(l_hash).mon_processed,1))/100)||
+                                                                                  ','||(g_ctx_buffer_tab(l_hash).mon_total_time/100)||')';  
+                                                                       
+                                                -- NoFormat End    
+         
+            -- Set up a loop as if we might try 5 times.
+            -- In case of a race where we're clashing on the primary key.
+            l_failed_merge_bool := TRUE;
+            FOR i IN 1 .. 10
+            LOOP
+               BEGIN
+                  SAVEPOINT pre_merge;
+                  EXECUTE IMMEDIATE l_sql
+                     USING g_ctx_buffer_tab(l_hash).mon_step, g_ctx_buffer_tab(l_hash).mon_context, g_ctx_buffer_tab(l_hash).mon_aspect;
+                  COMMIT;
+                  l_failed_merge_bool := FALSE;
+                  EXIT;
+               EXCEPTION
+                  WHEN dup_val_on_index THEN
+                     dbms_lock.sleep(round(dbms_random.value * 4, 2) + 1);
+                     ROLLBACK TO pre_merge;
+                     /* try again */
+               END;
+            END LOOP;
+            --
+            IF l_failed_merge_bool
+            THEN
+               pkg_pre_etl_tools.pr_set_context(i_attr  => fn_const_prefix ||
+                                                           fn_const_merge_clash
+                                               ,i_value => 'Merge Clash - Failed to write some introspection stats :' || g_ctx_buffer_tab(l_hash)
+                                                          .mon_step || '/' || g_ctx_buffer_tab(l_hash)
+                                                          .mon_context || '/' || g_ctx_buffer_tab(l_hash)
+                                                          .mon_aspect);
+            END IF;
+            --
+            l_hash := g_ctx_buffer_tab.next(l_hash);
+         END LOOP;
+         --
+         g_ctx_buffer_tab.delete;
+      END IF;
+      -- Autonomous transaction commit.
+      COMMIT;
+      --
+   EXCEPTION
+      WHEN OTHERS THEN
+         -- NEVER FAIL IN INTROSPECTION!
+         -- SO INTENTIONALLY CONSUME ERROR AND CONTINUE - DO NOT RE-RAISE.
+         -- But keep a context setup that says there has been a problem.
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_const_prefix ||
+                                                     fn_const_use_error
+                                         ,i_value => 'QUIETLY Failed in pkg_pre_etl_utilities.pr_dump_introspection_stats : ' ||
+                                                     SQLERRM);
+         COMMIT;
+      
+   END pr_dump_introspection_stats;
+
+   /*------------------------------------------------------------------------------------
+   ** Converts a BLOB to a CLOB
+   **
+   ** @param pbli_blob                The blob to convert to clob.
+   **
+   ** @param pvi_tf_raise_ex_on_fail  Raise an exception on failure to convert? (T/F).
+   **
+   ** @return                         A clob.
+   */
+   FUNCTION fn_convert_blob_to_clob
+   (
+      i_blob                IN BLOB
+     ,i_tf_raise_ex_on_fail IN VARCHAR2
+   ) RETURN CLOB
+      PARALLEL_ENABLE IS
+      lc_clob          CLOB;
+      lpi_dest_offset  PLS_INTEGER := 1;
+      lpi_src_offset   PLS_INTEGER := 1;
+      lpi_lang_context PLS_INTEGER := 0;
+      lpi_warning      PLS_INTEGER := 0;
+      --
+      e_insufficient_privileges EXCEPTION;
+      PRAGMA EXCEPTION_INIT(e_insufficient_privileges, -1031);
+   BEGIN
+      IF i_tf_raise_ex_on_fail NOT IN ('T', 'F')
+      THEN
+         raise_application_error(-20001
+                                ,'Unknown mode for pvi_tf_raise_ex_on_fail (should be T or F).');
+      END IF;
+      --
+      IF dbms_lob.compare(i_blob, empty_blob()) = 0
+         OR i_blob IS NULL
+      THEN
+         RETURN empty_clob();
+      ELSE
+      
+         -- Create a temporary CLOB
+         dbms_lob.createtemporary(lob_loc => lc_clob
+                                 ,cache   => TRUE
+                                 ,dur     => dbms_lob.session);
+      
+         -- Take the contents of the uncompressed BLOB and put it in a CLOB
+         dbms_lob.converttoclob(dest_lob     => lc_clob
+                               ,src_blob     => i_blob
+                               ,amount       => dbms_lob.lobmaxsize
+                               ,dest_offset  => lpi_dest_offset
+                               ,src_offset   => lpi_src_offset
+                               ,blob_csid    => dbms_lob.default_csid
+                               ,lang_context => lpi_lang_context
+                               ,warning      => lpi_warning);
+         --
+         -- Return a CLOB.
+         RETURN lc_clob;
+      END IF;
+   EXCEPTION
+      WHEN e_insufficient_privileges THEN
+         IF i_tf_raise_ex_on_fail = 'T'
+         THEN
+            RAISE;
+         ELSE
+            RETURN 'Unable to convert.  The blob may be compressed, or there are insufficient privileges.';
+         END IF;
+      WHEN OTHERS THEN
+         IF i_tf_raise_ex_on_fail = 'T'
+         THEN
+            RAISE;
+         ELSE
+            RETURN 'Unable to convert. ' || SQLERRM;
+         END IF;
+   END fn_convert_blob_to_clob;
+
+   /*------------------------------------------------------------------------------------
+   ** Converts a CLOB to a BLOB
+   **
+   ** @param pci_clob               The clob to convert to blob
+   **
+   ** @return                       A blob.
+   */
+   FUNCTION fn_convert_clob_to_blob(i_clob IN CLOB) RETURN BLOB
+      PARALLEL_ENABLE IS
+      lbl_blob         BLOB;
+      lpi_dest_offset  PLS_INTEGER := 1;
+      lpi_src_offset   PLS_INTEGER := 1;
+      lpi_lang_context PLS_INTEGER := 0;
+      lpi_warning      PLS_INTEGER := 0;
+   
+   BEGIN
+      IF dbms_lob.compare(i_clob, empty_clob()) = 0
+         OR i_clob IS NULL
+      THEN
+         RETURN empty_blob();
+      ELSE
+         -- Create a temporary BLOB
+         dbms_lob.createtemporary(lob_loc => lbl_blob
+                                 ,cache   => TRUE
+                                 ,dur     => dbms_lob.session);
+      
+         -- Take the contents of the CLOB and put it in a BLOB
+         dbms_lob.converttoblob(dest_lob     => lbl_blob
+                               ,src_clob     => i_clob
+                               ,amount       => dbms_lob.getlength(i_clob)
+                               ,dest_offset  => lpi_dest_offset
+                               ,src_offset   => lpi_src_offset
+                               ,blob_csid    => dbms_lob.default_csid
+                               ,lang_context => lpi_lang_context
+                               ,warning      => lpi_warning);
+         --
+         -- Return a BLOB
+         RETURN lbl_blob;
+      END IF;
+   END fn_convert_clob_to_blob;
+
+   /*------------------------------------------------------------------------------------
+   ** Takes a CLOB and compresses it (lz compression) into a BLOB
+   **
+   ** @param pci_clob               The clob to compress.
+   **
+   ** @return                       A blob containing the compressed clob.
+   */
+   FUNCTION fn_clob_to_compressed_blob(i_clob IN CLOB) RETURN BLOB
+      PARALLEL_ENABLE IS
+   BEGIN
+      IF dbms_lob.compare(i_clob, empty_clob()) = 0
+         OR i_clob IS NULL
+      THEN
+         RETURN empty_blob();
+      ELSE
+         --
+         -- Return a compressed BLOB
+         RETURN utl_compress.lz_compress(src => fn_convert_clob_to_blob(i_clob => i_clob));
+      END IF;
+   END fn_clob_to_compressed_blob;
+
+   /*------------------------------------------------------------------------------------
+   ** Takes a BLOB and compresses it (lz compression).
+   **
+   ** @param pbli_blob              The blob to compress.
+   **
+   ** @return                       A blob containing compressed data.
+   */
+   FUNCTION fn_compress_blob(i_blob IN BLOB) RETURN BLOB
+      PARALLEL_ENABLE IS
+   BEGIN
+      IF dbms_lob.compare(i_blob, empty_blob()) = 0
+         OR i_blob IS NULL
+      THEN
+         RETURN empty_blob();
+      ELSE
+         --
+         -- Return a compressed BLOB
+         RETURN utl_compress.lz_compress(src => i_blob);
+      END IF;
+   END fn_compress_blob;
+
+   /*------------------------------------------------------------------------------------
+   ** Takes a compressed BLOB and uncompresses it (lz uncompression).
+   **
+   ** @param pbi_compressed_blob    The blob to uncompress.
+   **
+   ** @return                       An uncompressed blob.
+   */
+   FUNCTION fn_uncompress_blob(i_compressed_blob IN BLOB) RETURN BLOB
+      PARALLEL_ENABLE IS
+   BEGIN
+      IF dbms_lob.compare(i_compressed_blob, empty_blob()) = 0
+         OR i_compressed_blob IS NULL
+      THEN
+         RETURN empty_blob();
+      ELSE
+         RETURN(utl_compress.lz_uncompress(src => i_compressed_blob));
+      END IF;
+   END fn_uncompress_blob;
+
+   /*------------------------------------------------------------------------------------
+   ** Takes a compressed BLOB and uncompresses it (lz uncompression) and
+   ** converts it into a CLOB.
+   **
+   ** @param pbi_compressed_blob    The blob to uncompress.
+   **
+   ** @return                       A clob containing the uncompressed blob.
+   */
+   FUNCTION fn_uncompress_blob_to_clob(i_compressed_blob IN BLOB)
+      RETURN CLOB
+      PARALLEL_ENABLE IS
+   
+      lbl_blob BLOB := fn_uncompress_blob(i_compressed_blob => i_compressed_blob);
+   
+   BEGIN
+      IF dbms_lob.compare(lbl_blob, empty_blob()) = 0
+         OR lbl_blob IS NULL
+      THEN
+         RETURN empty_clob();
+      ELSE
+         RETURN fn_convert_blob_to_clob(i_blob                => lbl_blob
+                                       ,i_tf_raise_ex_on_fail => 'T');
+      END IF;
+   END fn_uncompress_blob_to_clob;
+
+   /*------------------------------------------------------------------------------------
+   ** Takes a clob and returns a hash in a RAW (16)
+   **
+   ** @param i_clob                    The clob to get a hash for.
+   **
+   ** @return                          A hash as a RAW.
+   */
+   FUNCTION fn_get_hash_for_clob(i_clob IN CLOB) RETURN RAW IS
+   BEGIN
+      RETURN dbms_crypto.hash(i_clob
+                             ,to_number(dbms_crypto.hash_md5));
+   END fn_get_hash_for_clob;
+
+   /*------------------------------------------------------------------------------------
+   ** Gets the last time the pre_etl data was changed.
+   ** Useful if you want to know if its worth taking a backup
+   **
+   ** @return                          A timestamp of the last time the meta data was changed.
+   */
+   FUNCTION fn_get_last_metadata_chgd_time RETURN TIMESTAMP IS
+      l_max_acd TIMESTAMP(6);
+      l_acd     TIMESTAMP(6);
+   BEGIN
+      FOR i_buf IN (SELECT table_name
+                      FROM user_tables
+                     WHERE table_name LIKE 'AUD/_PRE/_ETL/_%' ESCAPE '/')
+      LOOP
+         BEGIN
+            EXECUTE IMMEDIATE 'SELECT max(aud_changed_date_time) FROM ' ||
+                              i_buf.table_name
+               INTO l_acd;
+         EXCEPTION
+            WHEN OTHERS THEN
+               return null; /* do not fail here at all - but indicate failure by returning a null */
+         END;
+         IF l_acd > l_max_acd
+            OR l_max_acd IS NULL
+         THEN
+            l_max_acd := l_acd;
+         END IF;
+      END LOOP;
+      -- 
+      RETURN l_max_acd;
+   END fn_get_last_metadata_chgd_time;
+END pkg_pre_etl_utilities;
+/

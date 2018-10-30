@@ -1,0 +1,62 @@
+echo "... Setting Run Configuration  (Users to deploy as, target DB etc...)..."
+#
+##########################################################################################################################
+# Tool Deployment Parameters below:
+##########################################################################################################################
+# The username/password for pre_etl_owner (aka - The Migration Definition Schema where the metadata will be stored).
+# Leave the deploy_usr AS PRE_ETL_OWNER - DO NOT CHANGE THIS (unless you want to make a whole stack of other changes).
+deploy_usr="pre_etl_owner"
+deploy_pwd="pre_etl_owner"
+#
+# Read ONLY account for Viewing Only in the migration tool.
+# Leave the ro_usr AS PRE_ETL_RO - DO NOT CHANGE THIS (unless you want to make a whole stack of other changes).
+ro_usr="pre_etl_ro"
+ro_pwd="pre_etl_ro"
+#
+# The username/password for sys or admin (aka - your power user).  admin_ext is for AS SYSDBA (if needed)
+admin_usr="sys"
+admin_pwd="oracle"
+admin_ext="as sysdba"
+#
+# TABLE SPACES Defined below.  Set these tablespaces up before running the deploy.
+# These will be set as the DEFAULT tablespaces.
+# The tablespace for TEMP
+temp_ts="TEMP"
+#
+# The tablespace for the ETL tool
+tool_ts="REF_DATA"
+#
+# The tablespace for the STAGED data
+stg_ts="MCP_DATA"
+#
+# The target DB
+target_db="vale_oracle12102"
+
+##########################################################################################################################
+# Migration release parameters below: 
+##########################################################################################################################
+# REAL prod release Y/N (if real prod release then the target schemas will not be preceded by PROD)
+# This allows you to have a "prod" release target schema on your test environment (amongst your other test targets),
+# but when you come to deploy to real prod the target schemas will not have PROD_ preceding them.
+#
+real_prod_yn="N"
+#
+# For those installations that have multiple STAGING locations (for UAT / QA / DEV / PROD ) - MUST BE comma separated.
+# There must be at least one staging location defined below (this is the source location of the data to be migrated).
+# Staging locations are named XXXX_STG_ETL_OWNER where XXXX is one of the staged types below.  The deployment will create
+# the staging schema(s) for you (do not pre create these schemas).
+# EXAMPLE : stg_types="STAGE,TEST,DEV,PROD,DEMO"
+#
+stg_types="DEMO"
+#
+# If you're releasing to production for a migration run, then this really should be a Y.
+validate_all_stg_types_yn="Y"
+#
+# Validate the specified migration group. (IMPORTANT : USE UNDERSCORES FOR SPACES)
+validate_migration_group="DEMO"
+# Initialiser needed to setup the migration schema BEFORE validating the migration.
+# You may have work tables that are used in process steps or joined in views (these need to exist before validation is run)
+# This initialiser_name is the grouping of steps.  (See Migration Grouping in Define Migration).
+initialiser_name="DEMO_INITIALISER"
+initialiser_batch="1000"
+
