@@ -3320,7 +3320,10 @@ not(starts-with(.,'-0.' )))
                            END AS owner
                           ,lower(atc.column_name) AS column_name
                           ,lower(atc.data_type) AS data_type
-                          ,atc.data_length
+                          ,decode(atc.char_length
+                                 ,0
+                                 ,atc.data_length
+                                 ,atc.char_length) AS data_length
                           ,row_number() over(ORDER BY column_id) AS col_number
                           ,COUNT(*) over() AS total_cols
                       FROM all_tab_cols atc
@@ -3328,6 +3331,7 @@ not(starts-with(.,'-0.' )))
                        AND atc.owner = upper(i_schema_name)
                        AND atc.table_name NOT LIKE 'PLSQL_%'
                        AND atc.table_name NOT LIKE 'JSON_TAB%'
+                       AND atc.column_id IS NOT NULL
                      ORDER BY atc.column_id)
       LOOP
          IF l_count = 0
