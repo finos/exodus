@@ -1254,8 +1254,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_tools IS
    FUNCTION fn_get_hash_for_clob(i_clob IN CLOB) RETURN RAW
       PARALLEL_ENABLE IS
    BEGIN
-      RETURN dbms_crypto.hash(i_clob
-                             ,to_number(dbms_crypto.hash_md5));
+      IF i_clob IS NULL
+      THEN
+         RETURN NULL;
+      ELSE
+         RETURN dbms_crypto.hash(i_clob
+                                ,to_number(dbms_crypto.hash_md5));
+      END IF;
    END fn_get_hash_for_clob;
 
    ----------------------------------------------------------------------------
@@ -5778,7 +5783,8 @@ not(starts-with(.,'-0.' )))
       BEGIN
          FOR i_buf IN (SELECT *
                          FROM pre_etl_json_lines pejl
-                        WHERE pejl.document_name = i_document_name)
+                        WHERE pejl.document_name = i_document_name
+                        ORDER BY pejl.line_number)
          LOOP
             l_return_clob := l_return_clob || i_buf.json_line;
          END LOOP;
