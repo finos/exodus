@@ -371,6 +371,8 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
              q'[ EXECUTE IMMEDIATE 'alter session disable parallel ddl'; ]' || fn_lf || 
              q'[ EXECUTE IMMEDIATE 'alter session set cursor_sharing = FORCE'; ]' || fn_lf || 
              q'[ EXECUTE IMMEDIATE 'alter session set "_optimizer_unnest_scalar_sq"= FALSE'; ]'|| fn_lf ||
+             q'[ EXECUTE IMMEDIATE 'alter session set NLS_DATE_FORMAT = ''DD-MON-YYYY HH24.MI.SS'''; ]'|| fn_lf || 
+             q'[ EXECUTE IMMEDIATE 'alter session set NLS_TIMESTAMP_TZ_FORMAT = ''DD-MON-YYYY HH24.MI.SS.FF6'''; ]'|| fn_lf ||
              q'[ EXECUTE IMMEDIATE 'alter session set NLS_TIMESTAMP_FORMAT = ''DD-MON-YYYY HH24.MI.SS.FF6'''; ]';
       -- NoFormat End              
    END fn_no_parallel_for_session_txt;
@@ -1959,7 +1961,8 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
            INTO l_return
            FROM pre_etl_migration_detail pemd
           WHERE pemd.migration_group = i_migration_group
-            AND pemd.migration_name = i_migration_name;
+            AND pemd.migration_name = i_migration_name
+            AND rownum = 1;
          RETURN l_return;
       EXCEPTION
          WHEN no_data_found THEN
