@@ -5613,19 +5613,19 @@ not(starts-with(.,'-0.' )))
       l_scs         VARCHAR2(4000);
       l_scs_initial VARCHAR2(500);
       --
-      l_spaces VARCHAR2(30);
+      l_spaces VARCHAR2(500);
       l_clause VARCHAR2(5);
       l_count  NUMBER;
       l_count2 NUMBER;
       l_value  VARCHAR2(32767);
-      l_type   VARCHAR2(30);
+      l_type   VARCHAR2(500);
       l_pos    NUMBER;
-      l_idx    VARCHAR2(30);
+      l_idx    VARCHAR2(500);
       --
-      TYPE t_tab IS TABLE OF VARCHAR2(30);
-      TYPE t_tab3 IS TABLE OF VARCHAR2(1) INDEX BY VARCHAR2(30);
-      TYPE t_tab_col_conv IS TABLE OF VARCHAR2(30) INDEX BY VARCHAR2(61);
-      TYPE t_tab_select_list IS TABLE OF VARCHAR2(61) INDEX BY BINARY_INTEGER;
+      TYPE t_tab IS TABLE OF VARCHAR2(500);
+      TYPE t_tab3 IS TABLE OF VARCHAR2(1) INDEX BY VARCHAR2(500);
+      TYPE t_tab_col_conv IS TABLE OF VARCHAR2(500) INDEX BY VARCHAR2(500);
+      TYPE t_tab_select_list IS TABLE OF VARCHAR2(500) INDEX BY BINARY_INTEGER;
       l_tab_cols        t_tab;
       l_seq_tab         t_tab3;
       l_tab_used        t_tab3;
