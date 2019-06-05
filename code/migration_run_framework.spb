@@ -4,21 +4,21 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
        Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
        
        Developed by Christian Leigh
-
+   
        Copyright 2018 IHS Markit
-
+   
        Licensed under the Apache License, Version 2.0 (the "License");
        you may not use this file except in compliance with the License.
        You may obtain a copy of the License at
-
+   
            http://www.apache.org/licenses/LICENSE-2.0
-
+   
        Unless required by applicable law or agreed to in writing, software
        distributed under the License is distributed on an "AS IS" BASIS,
        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
        See the License for the specific language governing permissions and
        limitations under the License.
-
+   
      =================================================================================================  
    */
 
@@ -91,153 +91,153 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_lf(i_quantity IN NUMBER DEFAULT 1) RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_lf(i_quantity IN NUMBER DEFAULT 1) RETURN VARCHAR2 IS
    BEGIN
       RETURN lpad(chr(10), i_quantity, chr(10));
    END fn_lf;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_dev RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_dev RETURN VARCHAR2 IS
    BEGIN
       RETURN 'DEV';
    END fn_dev;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_man RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_man RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MAN';
    END fn_man;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_info RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_info RETURN VARCHAR2 IS
    BEGIN
       RETURN 'INFO';
    END fn_info;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_error RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_error RETURN VARCHAR2 IS
    BEGIN
       RETURN 'ERROR';
    END fn_error;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_warning RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_warning RETURN VARCHAR2 IS
    BEGIN
       RETURN 'WARNING';
    END fn_warning;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_status RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_status RETURN VARCHAR2 IS
    BEGIN
       RETURN 'STATUS';
    END fn_status;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_failed RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_failed RETURN VARCHAR2 IS
    BEGIN
       RETURN '##FAILED##';
    END fn_failed;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_completed RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_completed RETURN VARCHAR2 IS
    BEGIN
       RETURN '##COMPLETED##';
    END fn_completed;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_master_job RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_master_job RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIGRATION_MASTER_JOB';
    END fn_master_job;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_monitor_job RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_monitor_job RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIGRATION_MONITOR_JOB';
    END fn_monitor_job;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_monitor_job_alive RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_monitor_job_alive RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIGRATION_MONITOR_JOB_ALIVE';
    END fn_ctx_monitor_job_alive;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_child_job RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_child_job RETURN VARCHAR2 IS
    BEGIN
       RETURN '%' || 'MIG/_TASK/_' || '%';
    END fn_child_job;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_migration_start_time RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_migration_start_time RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_MIGRATION_START_TIME';
    END fn_ctx_migration_start_time;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_migration_running RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_migration_running RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_MIGRATION_RUNNING';
    END fn_ctx_migration_running;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_migration_batch RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_migration_batch RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_MIGRATION_BATCH';
    END fn_ctx_migration_batch;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_migration_group RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_migration_group RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_MIGRATION_GROUP';
    END fn_ctx_migration_group;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_run_context RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_run_context RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_RUN_CONTEXT';
    END fn_ctx_run_context;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_start_at_step RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_start_at_step RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_START_AT_STEP';
    END fn_ctx_start_at_step;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_start_at_thread RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_start_at_thread RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_START_AT_THREAD';
    END fn_ctx_start_at_thread;
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_stop_at_step RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_stop_at_step RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_STOP_AT_STEP';
    END fn_ctx_stop_at_step;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_concurrency RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_concurrency RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_CONCURRENCY';
    END fn_ctx_concurrency;
@@ -245,125 +245,132 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
    --------------------------------------------------------------------------------------------------------
 
    FUNCTION fn_ctx_rows_per_thread RETURN VARCHAR2
-      PARALLEL_ENABLE result_cache IS
+      PARALLEL_ENABLE IS
    BEGIN
       RETURN 'MGCTX_ROWS_PER_THREAD';
    END fn_ctx_rows_per_thread;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_step_name RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_step_name RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_STEP_NAME';
    END fn_ctx_step_name;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_fault_detected RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_fault_detected RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_FAULT_DETECTED';
    END fn_ctx_fault_detected;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_kill_detected RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_kill_detected RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_KILL_DETECTED';
    END fn_ctx_kill_detected;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_task_list RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_task_list RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_TASK_LIST';
    END fn_ctx_task_list;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_job_list RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_exit_state RETURN VARCHAR2 IS
+   BEGIN
+      RETURN 'MGCTX_EXIT_STATE';
+   END fn_ctx_exit_state;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_ctx_job_list RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_JOB_LIST';
    END fn_ctx_job_list;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_lock_handle RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_lock_handle RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_LOCK_HANDLE';
    END fn_ctx_lock_handle;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_force_email RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_force_email RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_FORCE_EMAIL';
    END fn_ctx_force_email;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_ctx_job_class RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_ctx_job_class RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MGCTX_JOB_CLASS';
    END fn_ctx_job_class;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_man_email RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_man_email RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_EMAIL_RECIPIENTS_MAN';
    END fn_param_const_man_email;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_dev_email RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_dev_email RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_EMAIL_RECIPIENTS_DEV';
    END fn_param_const_dev_email;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_man_cycle RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_man_cycle RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_UPDATE_CYCLE_MINS_MAN';
    END fn_param_const_man_cycle;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_dev_cycle RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_dev_cycle RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_UPDATE_CYCLE_MINS_DEV';
    END fn_param_const_dev_cycle;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_sender RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_sender RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_STATUS_EMAIL_SENDER';
    END fn_param_const_sender;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_const_email_host RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_const_email_host RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_SMTP_HOST';
    END fn_param_const_email_host;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_param_consumer_group RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_param_consumer_group RETURN VARCHAR2 IS
    BEGIN
       RETURN 'MIG_ETL_CONSUMER_GROUP';
    END fn_param_consumer_group;
 
    --------------------------------------------------------------------------------------------------------
 
-   FUNCTION fn_max_lines RETURN NUMBER result_cache IS
+   FUNCTION fn_max_lines RETURN NUMBER IS
    BEGIN
       RETURN 1000;
    END fn_max_lines;
 
    --------------------------------------------------------------------------------------------------------
-   FUNCTION fn_no_parallel_for_session_txt RETURN VARCHAR2 result_cache IS
+   FUNCTION fn_no_parallel_for_session_txt RETURN VARCHAR2 IS
    BEGIN
       -- NoFormat Start 
       RETURN q'[ EXECUTE IMMEDIATE 'alter session disable parallel query'; ]' || fn_lf ||
@@ -430,6 +437,14 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
       --
       RETURN l_return;
    END fn_get_oed_count;
+
+   --------------------------------------------------------------------------------------------------------
+
+   FUNCTION fn_get_exit_status RETURN VARCHAR2 IS
+   BEGIN
+      RETURN nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => migration_run_framework.fn_ctx_exit_state)
+                ,'UNKNOWN');
+   END fn_get_exit_status;
 
    --------------------------------------------------------------------------------------------------------
 
@@ -883,9 +898,18 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
 
    --------------------------------------------------------------------------------------------------------
 
-   PROCEDURE pr_teardown_contexts IS
+   PROCEDURE pr_teardown_contexts(i_all_bool IN BOOLEAN DEFAULT FALSE) IS
+      l_preserved_exit_state VARCHAR2(2000);
    BEGIN
-      pkg_pre_etl_tools.pr_destroy_context;
+      IF i_all_bool
+      THEN
+         pkg_pre_etl_tools.pr_destroy_context;
+      ELSE
+         l_preserved_exit_state := pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_exit_state);
+         pkg_pre_etl_tools.pr_destroy_context;
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => l_preserved_exit_state);
+      END IF;
    END pr_teardown_contexts;
 
    --------------------------------------------------------------------------------------------------------
@@ -2281,6 +2305,9 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
                                     i_migration_name
             ,i_log_extended_info => l_statement_clob);
       --
+      -- We need to clear down any caches for the statement runs because they can incorrectly share state.
+      pkg_pre_etl_tools.pr_clear_json_cache;
+      --
       IF instr(upper(i_statement), pkg_pre_etl_tools.fn_batch) > 0
          AND i_batch IS NOT NULL
       THEN
@@ -2791,6 +2818,8 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
       IF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_fault_detected)
             ,'FALSE') = 'TRUE'
       THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => 'FAILED');
          pr_log(i_log_type  => fn_status
                ,i_log_entry => 'Master Job Finished : Errors occurred during the run.');
       ELSIF nvl(pkg_pre_etl_tools.fn_get_context_value(i_attr => fn_ctx_kill_detected)
@@ -2799,6 +2828,8 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
          pr_log(i_log_type  => fn_status
                ,i_log_entry => 'Master Job Killed : See log for more information.');
       ELSE
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => 'SUCCESS');
          pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
                                          ,i_value => fn_completed);
          pr_log(i_log_type  => fn_status
@@ -2806,6 +2837,8 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
       END IF;
    EXCEPTION
       WHEN OTHERS THEN
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => 'FAILED');
          pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_step_name
                                          ,i_value => fn_failed);
          pr_log(i_log_type          => fn_error
@@ -2923,7 +2956,7 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
                                 ,'migration_run_framework : launch : i_start_at_thread can only be used for steps that are threaded (use the driver).');
       END IF;
       --
-      pr_teardown_contexts;
+      pr_teardown_contexts(i_all_bool => TRUE);
       --
       -- Setup external contexts.
       --   Sometimes you will want to control the behaviour of a migration run
@@ -3254,6 +3287,11 @@ CREATE OR REPLACE PACKAGE BODY migration_run_framework IS
       IF upper(nvl(i_killer, '#')) != 'MONITOR'
       THEN
          pr_teardown_contexts;
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => 'KILLED');
+      ELSE
+         pkg_pre_etl_tools.pr_set_context(i_attr  => fn_ctx_exit_state
+                                         ,i_value => 'FAILED');
       END IF;
       --
       pr_clear_instructions;

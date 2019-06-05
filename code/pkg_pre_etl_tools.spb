@@ -7043,6 +7043,7 @@ not(starts-with(.,'-0.' )))
       g_cache_pem.delete;
       g_cache_find_swap.delete;
       g_tab_of_t_tab_pejl.delete;
+      g_tab_mapped_cache.delete;
    END pr_clear_json_cache;
 
    ----------------------------------------------------------------------------
