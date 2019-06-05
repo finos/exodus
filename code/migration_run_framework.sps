@@ -25,63 +25,68 @@ CREATE OR REPLACE PACKAGE migration_run_framework AUTHID CURRENT_USER IS
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'INFO'
    */
-   FUNCTION fn_info RETURN VARCHAR2 result_cache;
+   FUNCTION fn_info RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'WARNING'
    */
-   FUNCTION fn_warning RETURN VARCHAR2 result_cache;
+   FUNCTION fn_warning RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'WARNING'
    */
-   FUNCTION fn_error RETURN VARCHAR2 result_cache;
+   FUNCTION fn_error RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'STATUS'
    */
-   FUNCTION fn_status RETURN VARCHAR2 result_cache;
+   FUNCTION fn_status RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_MIGRATION_BATCH'
    */
-   FUNCTION fn_ctx_migration_batch RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_migration_batch RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_MIGRATION_GROUP'
    */
-   FUNCTION fn_ctx_migration_group RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_migration_group RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_RUN_CONTEXT'
    */
-   FUNCTION fn_ctx_run_context RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_run_context RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_ROWS_PER_THREAD'
    */
    FUNCTION fn_ctx_rows_per_thread RETURN VARCHAR2
-      PARALLEL_ENABLE result_cache;
+      PARALLEL_ENABLE;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_STEP_NAME'
    */
-   FUNCTION fn_ctx_step_name RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_step_name RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_CONCURRENCY'
    */
-   FUNCTION fn_ctx_concurrency RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_concurrency RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 'MGCTX_TASK_LIST'
    */
-   FUNCTION fn_ctx_task_list RETURN VARCHAR2 result_cache;
+   FUNCTION fn_ctx_task_list RETURN VARCHAR2;
+
+   /*------------------------------------------------------------------------------------
+   ** HELPER function (could be a computed property): returns 'MGCTX_EXIT_STATE'
+   */
+   FUNCTION fn_ctx_exit_state RETURN VARCHAR2;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function (could be a computed property): returns 1000
    */
-   FUNCTION fn_max_lines RETURN NUMBER result_cache;
+   FUNCTION fn_max_lines RETURN NUMBER;
 
    /*------------------------------------------------------------------------------------
    ** HELPER function. Checks if the context is a valid name.
@@ -108,6 +113,15 @@ CREATE OR REPLACE PACKAGE migration_run_framework AUTHID CURRENT_USER IS
       i_schema_name IN VARCHAR2
      ,i_table_name  IN VARCHAR2
    ) RETURN NUMBER result_cache;
+   
+   /*------------------------------------------------------------------------------------
+   ** Returns the exit status of the migration
+   **
+   ** @return                    SUCCESS / FAILED / KILLED / UNKNOWN
+   */
+
+   FUNCTION fn_get_exit_status
+    RETURN VARCHAR2;   
 
    /*------------------------------------------------------------------------------------
    ** Register a parallel execute task.
@@ -206,7 +220,7 @@ CREATE OR REPLACE PACKAGE migration_run_framework AUTHID CURRENT_USER IS
    **
    ** @param i_log_extended_info             More detailed text for diagnostics.
    */
-   
+
    PROCEDURE pr_log
    (
       i_log_type           IN VARCHAR2
