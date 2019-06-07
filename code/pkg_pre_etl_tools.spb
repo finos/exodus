@@ -2748,7 +2748,15 @@ not(starts-with(.,'-0.' )))
                                    l_pem_buf.column_name);
                l_idx_tab_dot_col := upper(l_pem_buf.table_name || '.' ||
                                           l_pem_buf.column_name);
-               l_tab_mapped(l_idx_tab_dot_col) := g_nv_pos_cache(l_idx_tab_dot_col); /* indicates column has been used and links the true position */
+               BEGIN
+                  l_tab_mapped(l_idx_tab_dot_col) := g_nv_pos_cache(l_idx_tab_dot_col); /* indicates column has been used and links the true position */
+               EXCEPTION
+                  WHEN no_data_found THEN
+                     raise_application_error(-20000
+                                            ,'Cannot locate source for : ' ||
+                                             l_idx_tab_dot_col ||
+                                             ' - Check the table is correctly included in the migration definition, or that the target JSON is mapped correctly.');
+               END;               
                --
                IF l_pem_buf.cnt = l_pem_idx_counter
                THEN
