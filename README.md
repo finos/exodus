@@ -1,4 +1,6 @@
 # EXODUS : Map > Document > Migrate > JSON & Tables
+![alt text](https://github.com/finos/exodus/blob/master/exodus_logo_small.jpg "Exodus")
+
 
 [![FINOS - Incubating](https://cdn.jsdelivr.net/gh/finos/contrib-toolbox@master/images/badge-incubating.svg)](https://finosfoundation.atlassian.net/wiki/display/FINOS/Incubating)
 
