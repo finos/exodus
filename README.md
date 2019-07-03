@@ -62,8 +62,7 @@ You will need an Oracle Database, and an Oracle Forms 11g (or higher) installati
 
 ## Contributing
 
-No contributions can be accepted.  Request changes and they will be dealt with in order of priority.
-
+We welcome contributions in form of request changes, that can be submitted via [GitHub issues](https://github.com/finos/exodus/issues).
 
 ## License
 
