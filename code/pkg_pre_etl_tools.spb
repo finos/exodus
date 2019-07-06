@@ -7673,8 +7673,7 @@ not(starts-with(.,'-0.' )))
           WHERE dtc.owner = upper(i_owner_name)
             AND dtc.table_name =
                 nvl(upper(i_single_table_name), dtc.table_name)
-            AND dtc.table_name NOT LIKE 'BIN$%'
-            AND rownum = 1;
+            AND dtc.table_name NOT LIKE 'BIN$%';
       --                  
       INSERT INTO pre_etl_db2_tables
          (table_name
