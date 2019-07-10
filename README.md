@@ -57,6 +57,15 @@ Run the shell script.
 [![Imgur](https://i.imgur.com/GLnXlso.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Mapping.mp4)
 [![Imgur](https://i.imgur.com/7zhNZyL.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Migration.mp4)
 
+*Coming Soon !*
+- Re-Mapping Documents
+- Using the Driver Tables
+- Backing Up & Restoring Metadata
+- Transporting Metadata to Target Run-Platforms
+- Search tools
+- Handling and debugging migration errors
+- Introspection
+
 ## Usage example
 
 See the supplied Exodus Manual.docx
