@@ -50,6 +50,11 @@ Run the shell script.
 . deploy_master.sh
 ```
 
+## Video Guides
+[![Imgur](https://i.imgur.com/GaeyAV2.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Installation.mp4)
+[![Imgur](https://i.imgur.com/GLnXlso.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Mapping.mp4)
+[![Imgur](https://i.imgur.com/7zhNZyL.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Migration.mp4)
+
 ## Usage example
 
 See the supplied Exodus Manual.docx
