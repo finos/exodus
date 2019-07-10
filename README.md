@@ -67,7 +67,7 @@ You will need an Oracle Database, and an Oracle Forms 11g (or higher) installati
 
 ## Contributing
 
-No contributions can be accepted.  Request changes and they will be dealt with in order of priority.
+We hope the community finds these tools useful.  We welcome contributions in form of request changes, that can be submitted via GitHub issues. Feel free to look through the code base and submit a pull request. And if you like what you see maybe give the project a star in Github.
 
 
 ## License
