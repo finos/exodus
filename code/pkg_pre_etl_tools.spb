@@ -2310,7 +2310,7 @@ not(starts-with(.,'-0.' )))
                                    ',''DD-MON-YYYY HH24.MI.SS.FF6'')||chr(39) ' ||
                                    pedc.column_name
                                   WHEN 'DATE' THEN
-                                   ', ''YYYY-MM-DD'')||chr(39) ' ||
+                                   ', ''DD-MON-YYYY HH24.MI.SS'')||chr(39) ' ||
                                    pedc.column_name
                                   WHEN 'SMALLINT' THEN
                                    ') ' || pedc.column_name
@@ -2736,7 +2736,7 @@ not(starts-with(.,'-0.' )))
                THEN
                   l_count := (l_pem_buf.cnt + 1);
                END IF;
-               l_count := l_count - 1;
+               l_count           := l_count - 1;
                l_return := REPLACE(l_return
                                   ,g_tool_const_mapped || (CASE
                                       WHEN l_pem_buf.cnt > 1 THEN
@@ -2756,7 +2756,7 @@ not(starts-with(.,'-0.' )))
                                             ,'Cannot locate source for : ' ||
                                              l_idx_tab_dot_col ||
                                              ' - Check the table is correctly included in the migration definition, or that the target JSON is mapped correctly.');
-               END;               
+               END;
                --
                IF l_pem_buf.cnt = l_pem_idx_counter
                THEN
@@ -5338,6 +5338,36 @@ not(starts-with(.,'-0.' )))
                                  ,i_migration_group => i_migration_group
                                  ,i_migration_name  => i_migration_name);
    END fn_touch_possible_yn_cached;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_is_json_change_valid
+   (
+      i_document_name IN VARCHAR2
+     ,i_line_number   IN NUMBER
+     ,i_changed_line  IN VARCHAR2
+   ) RETURN BOOLEAN IS
+      l_json VARCHAR2(32767) := NULL;
+   BEGIN
+      FOR i_buf IN (SELECT (CASE pejl.line_number
+                              WHEN i_line_number THEN
+                               i_changed_line
+                              ELSE
+                               pejl.json_line
+                           END) AS json_line
+                      FROM pre_etl_json_lines pejl
+                     WHERE pejl.document_name = i_document_name
+                     ORDER BY pejl.line_number)
+      LOOP
+         l_json := l_json || i_buf.json_line;
+      END LOOP;
+      IF fn_flattened_json(i_json_text => l_json) IS NULL
+      THEN
+         RETURN FALSE;
+      ELSE
+         RETURN TRUE;
+      END IF;
+   END fn_is_json_change_valid;
 
    ----------------------------------------------------------------------------
 
