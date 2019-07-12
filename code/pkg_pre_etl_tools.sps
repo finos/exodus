@@ -2,19 +2,19 @@ CREATE OR REPLACE PACKAGE pkg_pre_etl_tools IS
    /*=================================================================================================
    
        ETL / Migration Utilities For Tabular to Tabular+JSON migration.
-
+   
        Developed by Christian Leigh
        
        ***********************************************************************************************
        
        Copyright 2018 IHS Markit
-
+   
        Licensed under the Apache License, Version 2.0 (the "License");
        you may not use this file except in compliance with the License.
        You may obtain a copy of the License at
-
+   
            http://www.apache.org/licenses/LICENSE-2.0
-
+   
        Unless required by applicable law or agreed to in writing, software
        distributed under the License is distributed on an "AS IS" BASIS,
        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -50,7 +50,7 @@ CREATE OR REPLACE PACKAGE pkg_pre_etl_tools IS
                    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR 
                    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF 
                    THE POSSIBILITY OF SUCH DAMAGE.
-
+   
        ************************************************************************************************
    
        Notes
@@ -1230,6 +1230,25 @@ CREATE OR REPLACE PACKAGE pkg_pre_etl_tools IS
      ,i_migration_group IN VARCHAR2
      ,i_migration_name  IN VARCHAR2
    ) RETURN VARCHAR2;
+
+   /*------------------------------------------------------------------------------------
+   ** Returns a boolean TRUE or FALSE
+   ** Validates if a change to the JSON is valid.
+   ** 
+   ** @param i_document_name         The document being altered.
+   **
+   ** @param i_line_number           The line number of JSON being altered.
+   **
+   ** @param i_changed_line          The new line (replacing the text of the line number given above).
+   **
+   ** @return                        TRUE = valid json overall, FALSE = Invalid overall.
+   */
+   FUNCTION fn_is_json_change_valid
+   (
+      i_document_name IN VARCHAR2
+     ,i_line_number   IN NUMBER
+     ,i_changed_line  IN VARCHAR2
+   ) RETURN BOOLEAN;
 
    /*------------------------------------------------------------------------------------
    ** Used by FORM.
