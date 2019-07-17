@@ -57,6 +57,8 @@ Run the shell script.
 [![Imgur](https://i.imgur.com/GLnXlso.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Mapping.mp4)
 [![Imgur](https://i.imgur.com/7zhNZyL.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Migration.mp4)
 
+**Please take a look at the WIKI for further information.**
+
 *Coming Soon !*
 - Re-Mapping Documents
 - Using the Driver Tables
