@@ -6,8 +6,8 @@
 
 # EXODUS - Migration Tools
 
-Exodus is a mapping, documenting, and migration tool especially designed with Oracle PL/SQL developers in mind.  If you are comfortable with Oracle PL/SQL then all your mapping and migration code can be constructed here without the need for non-Oracle external tools.  There is no magic “black box” behavior.  All of the auto-generated code (also in PL/SQL) is made available and viewable from within the tool, and because it’s in a language that seasoned Oracle developers are expert in, there will be no unexpected surprises with the technical approach.  
-It’s entirely possible to use Exodus to “just” document your mapping efforts (it will certainly be far less stressful and error prone than using a spreadsheet to capture mappings and relationships).  With just a basic understanding of the tool tables you can write your own SQL reports to get information about how much you’ve mapped (in other words, report on SOURCE data that you have understood enough to express a connection to the target end state) in your migration.  
+Exodus is a mapping, documenting, and migration tool that has been especially designed with Oracle PL/SQL developers in mind, with particular focus on transporting tabular data into a JSON centric storage paradigm.  If you are comfortable with Oracle PL/SQL then all your mapping and migration code can be constructed here without the need for non-Oracle external tools.  There is no magic “black box” behavior.  All of the auto-generated code (also in PL/SQL) is made available and viewable from within the tool, and because it’s in a language that seasoned Oracle developers are expert in, there will be no unexpected surprises with the technical approach.  
+It’s entirely possible to use Exodus to “just” document your mapping efforts (it will certainly be far less stressful and error prone than using a spreadsheet to capture mappings and relationships).  With just a basic understanding of the tool tables you can write your own [SQL reports](https://github.com/finos/exodus/tree/master/scripts/mapping_reports "SQL Report Example")  to get information about how much you’ve mapped (in other words, report on SOURCE data that you have understood enough to express a connection to the target end state) in your migration.  
 Exodus can be used to do far more than documenting the migration.  Exodus can form the core nucleus of your migration where all of the steps required to take data from a set of source tables to a set of target tables in multiple schemas can be defined and coded.  Exodus can map table-to-table and table-to-JSON documents.  You will be able to capture comments, questions, value translations, functions, and even SQL code to drive your migration.  
 There is an extensive run framework (including logging, introspection, and debugging instrumentation) to execute your migration to any level of concurrency that your hardware and licenses can support to maximize your compute resource.
 
@@ -57,6 +57,8 @@ Run the shell script.
 [![Imgur](https://i.imgur.com/GLnXlso.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Mapping.mp4)
 [![Imgur](https://i.imgur.com/7zhNZyL.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Migration.mp4)
 
+**Please take a look at the WIKI for further information.**
+
 *Coming Soon !*
 - Re-Mapping Documents
 - Using the Driver Tables
@@ -65,6 +67,10 @@ Run the shell script.
 - Search tools
 - Handling and debugging migration errors
 - Introspection
+
+## Application Screenshots
+
+[![Imgur](https://i.imgur.com/pqUVrze.jpg?2)](https://i.imgur.com/cVBFbPQ.jpg?1)
 
 ## Usage example
 
