@@ -68,6 +68,8 @@ Run the shell script.
 - Handling and debugging migration errors
 - Introspection
 
+[Exodus : YouTube Channel](https://www.youtube.com/channel/UCwmYTaG8deW-nYnl7v3rx9A "YouTube Channel") 
+
 ## Application Screenshots
 
 [![Imgur](https://i.imgur.com/pqUVrze.jpg?2)](https://i.imgur.com/cVBFbPQ.jpg?1)
