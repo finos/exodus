@@ -78,7 +78,7 @@ See the supplied Exodus Manual.docx
 
 ## Development setup
 
-You will need an Oracle Database, and an Oracle Forms 11g (or higher) installation.
+You will need an Oracle Database (12.1.0.2 or higher), and an Oracle Forms 11g (or higher) installation.
 
 ## Contributing
 
