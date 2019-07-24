@@ -56,6 +56,8 @@ Run the shell script.
 [![Imgur](https://i.imgur.com/GaeyAV2.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Installation.mp4)
 [![Imgur](https://i.imgur.com/GLnXlso.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Mapping.mp4)
 [![Imgur](https://i.imgur.com/7zhNZyL.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20Migration.mp4)
+[![Imgur](https://i.imgur.com/0PJhi6Q.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20-%20On%20ETL%20Driver.mp4)
+[![Imgur](https://i.imgur.com/YxdnUdh.png?1)](https://www.finos.org/hubfs/FINOS/exodus/Exodus%20-%20Remapping%20Example%20.mp4)
 
 **Please take a look at the WIKI for further information.**
 
