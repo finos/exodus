@@ -62,8 +62,6 @@ Run the shell script.
 **Please take a look at the WIKI for further information.**
 
 *Coming Soon !*
-- Re-Mapping Documents
-- Using the Driver Tables
 - Backing Up & Restoring Metadata
 - Transporting Metadata to Target Run-Platforms
 - Search tools
