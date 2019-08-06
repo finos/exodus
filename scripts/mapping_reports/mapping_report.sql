@@ -1,16 +1,18 @@
 DECLARE
-   l_indent     PLS_INTEGER := 0;
-   l_mappings   VARCHAR2(32767);
-   l_comments   VARCHAR2(32767);
-   l_table_name VARCHAR2(200);
-   l_mr_group   VARCHAR2(200);
+   l_indent       PLS_INTEGER := 0;
+   l_mappings     VARCHAR2(2000);
+   l_comments     VARCHAR2(32767);
+   l_comment_type VARCHAR2(2000);
+   l_table_name   VARCHAR2(200);
+   l_mr_group     VARCHAR2(200);
 BEGIN
    dbms_output.put_line(rpad('=', 200, '='));
    FOR pejd_buf IN (SELECT *
                       FROM pre_etl_json_document pejd
                      WHERE pejd.document_name NOT LIKE 'TEMP/_%'
                      ESCAPE '/'
-                     ORDER BY pejd.document_type)
+                     ORDER BY pejd.document_type
+                             ,pejd.document_name)
    LOOP
       dbms_output.put_line('TARGET DOCUMENT : ' ||
                            pejd_buf.document_name || '(' ||
@@ -33,8 +35,10 @@ BEGIN
          FOR pem_buf IN (SELECT pem.table_name
                                ,pem.column_name
                                ,pem.mr_group
+                               ,rownum AS rn
+                               ,COUNT(*) over() AS cnt
                            FROM pre_etl_related_json_lines perjl
-                           LEFT JOIN pre_etl_mapped pem
+                           JOIN pre_etl_mapped pem
                              ON (perjl.relationship_group_id =
                                 pem.relationship_group_id AND
                                 perjl.mr_group = pem.mr_group)
@@ -49,7 +53,7 @@ BEGIN
             IF l_mr_group != pem_buf.mr_group
             THEN
                l_mr_group := pem_buf.mr_group;
-               l_mappings := l_mappings || '(' || pem_buf.mr_group ||
+               l_mappings := l_mappings || '  (' || pem_buf.mr_group ||
                              ')  (Mapping)     : ';
             END IF;
             --
@@ -59,7 +63,23 @@ BEGIN
                l_mappings   := l_mappings || pem_buf.table_name || ':';
             END IF;
             --
-            l_mappings := l_mappings || lower(pem_buf.column_name) || ',';
+            l_mappings := l_mappings || lower(pem_buf.column_name) || (CASE
+                             WHEN pem_buf.cnt > 1 THEN
+                              ' AS :MAPPED#' || pem_buf.rn
+                             ELSE
+                              NULL
+                          END) || (CASE
+                             WHEN pem_buf.cnt = pem_buf.rn THEN
+                              NULL
+                             ELSE
+                              ','
+                          END) || (CASE
+                             WHEN pem_buf.cnt > 1 THEN
+                              chr(10) ||
+                              rpad(' ', 120 + length(pem_buf.table_name), ' ')
+                             ELSE
+                              NULL
+                          END);
          END LOOP;
          --
          l_mappings := rtrim(l_mappings, ',');
@@ -70,10 +90,7 @@ BEGIN
          l_mr_group := '#NULL#';
          FOR pec_buf IN (SELECT pec.mr_group
                                ,pec.comment_type
-                               ,REPLACE(pec.comments
-                                       ,chr(10)
-                                       ,chr(10) ||
-                                        rpad(' ', 117, ' ')) AS comments
+                               ,pec.comments
                            FROM pre_etl_related_json_lines perjl
                            LEFT JOIN pre_etl_comments pec
                              ON (pec.relationship_group_id =
@@ -88,37 +105,40 @@ BEGIN
          LOOP
             IF pec_buf.comments IS NOT NULL
             THEN
-               IF l_mappings IS NOT NULL
-               THEN
-                  l_mappings := l_mappings || chr(10) ||
-                                rpad(' ', 90, ' ');
-               END IF;
+               l_comments := l_comments || chr(10) ||
+                             rpad(' ', 92, ' ');
                --
-               IF l_mr_group != pec_buf.mr_group
-               THEN
-                  l_mr_group := pec_buf.mr_group;
-                  l_mappings := l_mappings || '(' || pec_buf.mr_group || ')';
-               END IF;
+               l_comments := l_comments || '(' || pec_buf.mr_group || ')';
+            
                --
-               l_comments := l_comments || '(' ||
-                             (CASE pec_buf.comment_type
-                                WHEN 'Q' THEN
-                                 'Question)    : '
-                                WHEN 'C' THEN
-                                 'Comment)     : '
-                                WHEN 'L' THEN
-                                 'Lookup)      : '
-                                WHEN 'T' THEN
-                                 'Translation) : '
-                                WHEN 'F' THEN
-                                 'Function)    : '
-                                WHEN 'D' THEN
-                                 'Dictionary)  : '
-                                WHEN 'V' THEN
-                                 'List)        : '
-                                WHEN 'A' THEN
-                                 'Array)       : '
-                             END) || pec_buf.comments || chr(10);
+               l_comment_type := '  (' || (CASE pec_buf.comment_type
+                                    WHEN 'Q' THEN
+                                     'Question)    : '
+                                    WHEN 'C' THEN
+                                     'Comment)     : '
+                                    WHEN 'L' THEN
+                                     'Lookup)      : '
+                                    WHEN 'T' THEN
+                                     'Translation) : '
+                                    WHEN 'F' THEN
+                                     'Function)    : '
+                                    WHEN 'D' THEN
+                                     'Dictionary)  : '
+                                    WHEN 'V' THEN
+                                     'List)        : '
+                                    WHEN 'A' THEN
+                                     'Array)       : '
+                                 END);
+               l_comments     := l_comments || l_comment_type ||
+                                 REPLACE(pec_buf.comments
+                                        ,chr(10)
+                                        ,chr(10) ||
+                                         rpad(' '
+                                             ,92 +
+                                              length(pec_buf.mr_group) + 2 +
+                                              length(l_comment_type)
+                                             ,' '));
+            
             END IF;
          END LOOP;
          --
@@ -126,6 +146,7 @@ BEGIN
          dbms_output.put_line(lpad(pejl_buf.line_number, 4, ' ') || '  ' ||
                               rpad(pejl_buf.json_line, 84, ' ') ||
                               l_mappings || '  ' || l_comments);
+         dbms_output.put_line(' ');
       END LOOP;
       --
       dbms_output.put_line(' ');
