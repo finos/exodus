@@ -65,7 +65,7 @@ Run the shell script.
 - Backing Up & Restoring Metadata
 - Transporting Metadata to Target Run-Platforms
 - Search tools
-- Handling and debugging migration errors
+- Handling and debugging migration errors [Restarting](https://github.com/finos/exodus/wiki/What-to-do-when-a-migration-step-fails. "Restart After Problems")
 - Introspection
 
 [Exodus : YouTube Channel](https://www.youtube.com/channel/UCwmYTaG8deW-nYnl7v3rx9A "YouTube Channel") 
