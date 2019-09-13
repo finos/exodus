@@ -683,7 +683,7 @@ BEGIN
      column_length         NUMBER             NOT NULL,
      comments              VARCHAR2(2000),
      tableset_name         VARCHAR2(50)       NOT NULL,
-     CONSTRAINT pedc_ck_ct check (column_type IN ('RAW', 'CHARACTER','TIMESTAMP','VARCHAR','SMALLINT','TIME','TIMESTAMP(6)','INTEGER','NUMBER','CHAR','0','DATE','DECIMAL','VARCHAR2','ROWID','CLOB')),
+     CONSTRAINT pedc_ck_ct check (column_type IN ('RAW', 'CHARACTER','TIMESTAMP','VARCHAR','SMALLINT','TIME','TIMESTAMP(6)','TIMESTAMP(6) WITH TIME ZONE','INTEGER','NUMBER','CHAR','0','DATE','DECIMAL','VARCHAR2','ROWID','CLOB')),
      CONSTRAINT pedc_pk PRIMARY KEY (table_name, column_name)
    )
    ]', '<TABLE>', l_objname);
