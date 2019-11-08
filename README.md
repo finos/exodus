@@ -69,6 +69,8 @@ Run the shell script.
 - Introspection
 
 [Exodus : YouTube Channel](https://www.youtube.com/channel/UCwmYTaG8deW-nYnl7v3rx9A "YouTube Channel") 
+[Installing Oracle Forms 12.2.1.4](https://youtu.be/y9d-ffO99Mk "Installing Oracle Forms") 
+
 
 ## Application Screenshots
 
