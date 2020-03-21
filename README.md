@@ -1,6 +1,7 @@
 # EXODUS : Map > Document > Migrate > JSON & Tables
 
 ![alt text](https://github.com/finos/exodus/blob/master/exodus_logo_small.jpg "Exodus")
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ffinos%2Fexodus.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Ffinos%2Fexodus?ref=badge_shield)
 
 [![FINOS - Incubating](https://cdn.jsdelivr.net/gh/finos/contrib-toolbox@master/images/badge-incubating.svg)](https://finosfoundation.atlassian.net/wiki/display/FINOS/Incubating)
 
@@ -97,3 +98,6 @@ Copyright 2018 IHS Markit
 Distributed under the [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
 SPDX-License-Identifier: [Apache-2.0](https://spdx.org/licenses/Apache-2.0)
+
+
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ffinos%2Fexodus.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Ffinos%2Fexodus?ref=badge_large)
