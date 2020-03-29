@@ -70,6 +70,9 @@ Run the shell script.
 
 [Exodus : YouTube Channel](https://www.youtube.com/channel/UCwmYTaG8deW-nYnl7v3rx9A "YouTube Channel") 
 
+[Installing Oracle Forms 12.2.1.4](https://youtu.be/y9d-ffO99Mk "Installing Oracle Forms") 
+
+
 ## Application Screenshots
 
 [![Imgur](https://i.imgur.com/pqUVrze.jpg?2)](https://i.imgur.com/cVBFbPQ.jpg?1)
@@ -80,7 +83,7 @@ See the supplied Exodus Manual.docx
 
 ## Development setup
 
-You will need an Oracle Database (12.1.0.2 or higher), and an Oracle Forms 11g (or higher) installation.
+You will need an Oracle Database (**12.1.0.2** or higher), and an Oracle Forms 11g (or higher) installation ( see : [Installing Oracle Forms 12.2.1.4](https://youtu.be/y9d-ffO99Mk "Installing Oracle Forms") ).
 
 ## Contributing
 
