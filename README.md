@@ -72,6 +72,8 @@ Run the shell script.
 
 [Installing Oracle Forms 12.2.1.4](https://youtu.be/y9d-ffO99Mk "Installing Oracle Forms") 
 
+[Installing The Exodus Forms](https://youtu.be/-gxjA74t57Y "Installing Exodus Forms") 
+
 
 ## Application Screenshots
 
