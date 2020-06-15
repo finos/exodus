@@ -7324,6 +7324,7 @@ not(starts-with(.,'-0.' )))
                         ,perjl.document_name AS document_name
                         ,to_char(perjl.line_number) AS line_number
                         ,perjl.mr_group AS map_rules_group
+                        ,pkg_pre_etl_utilities.fn_get_hash_for_clob(i_clob => pec.relationship_group_id||'-'||pec.comments) as hash_value
            FROM pre_etl_comments pec
            JOIN pre_etl_related_json_lines perjl
              ON (perjl.relationship_group_id =
@@ -7346,6 +7347,7 @@ not(starts-with(.,'-0.' )))
                         ,pejl.document_name AS document_name
                         ,to_char(pejl.line_number) AS line_number
                         ,'Not Applicable' AS map_rules_group
+                        ,NULL as hash_value
            FROM pre_etl_json_lines pejl
            JOIN pre_etl_json_document pejd
              ON (pejd.document_name = pejl.document_name)
@@ -7374,6 +7376,7 @@ not(starts-with(.,'-0.' )))
                         ,pemh.migration_group AS document_name
                         ,pemh.migration_name AS line_number
                         ,pemh.migration_group AS map_rules_group
+                        ,NULL as hash_value
            FROM pre_etl_migration_header pemh
            LEFT JOIN pre_etl_migration_detail pemd
              ON (pemd.migration_group = pemh.migration_group AND

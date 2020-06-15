@@ -69,7 +69,8 @@ CREATE OR REPLACE PACKAGE pkg_pre_etl_tools IS
       ,document_type   VARCHAR2(50)
       ,document_name   VARCHAR2(50)
       ,line_number     VARCHAR2(50)
-      ,map_rules_group VARCHAR2(50));
+      ,map_rules_group VARCHAR2(50)
+      ,hash_value      VARCHAR2(100));
    -- Because forms can't handle clobs we need to send big chunks back
    -- and forth using this clunky pl/sql collection.
    -- Intentionally not the maximum 32767 (SEE : g_const_vc_tab_length)
