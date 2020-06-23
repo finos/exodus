@@ -5348,7 +5348,31 @@ not(starts-with(.,'-0.' )))
      ,i_changed_line  IN VARCHAR2
    ) RETURN BOOLEAN IS
       l_json VARCHAR2(32767) := NULL;
+      CURSOR cur_pejd(c_document_name IN VARCHAR2) IS
+         SELECT pejd.document_type
+           FROM pre_etl_json_document pejd
+          WHERE pejd.document_name = c_document_name;
+      cur_pejd_buf        cur_pejd%ROWTYPE;
+      l_add_brackets_bool BOOLEAN := FALSE;
+      l_found_bool        BOOLEAN := FALSE;
    BEGIN
+      OPEN cur_pejd(c_document_name => i_document_name);
+      FETCH cur_pejd
+         INTO cur_pejd_buf;
+      l_found_bool := cur_pejd%FOUND;
+      CLOSE cur_pejd;
+      IF NOT l_found_bool
+      THEN
+         raise_application_error(-20000
+                                ,'Unrecognised Document Name.');
+      END IF;
+      IF cur_pejd_buf.document_type = 'STORED FRAGMENT'
+      THEN
+         l_add_brackets_bool := TRUE;
+      ELSE
+         l_add_brackets_bool := FALSE;
+      END IF;
+      --
       FOR i_buf IN (SELECT (CASE pejl.line_number
                               WHEN i_line_number THEN
                                i_changed_line
@@ -5361,7 +5385,17 @@ not(starts-with(.,'-0.' )))
       LOOP
          l_json := l_json || i_buf.json_line;
       END LOOP;
-      IF fn_flattened_json(i_json_text => l_json) IS NULL
+      IF fn_flattened_json(i_json_text => (CASE
+                                           WHEN l_add_brackets_bool THEN
+                                            '{'
+                                           ELSE
+                                            NULL
+                                        END) || l_json || (CASE
+                                           WHEN l_add_brackets_bool THEN
+                                            '}'
+                                           ELSE
+                                            NULL
+                                        END)) IS NULL
       THEN
          RETURN FALSE;
       ELSE
