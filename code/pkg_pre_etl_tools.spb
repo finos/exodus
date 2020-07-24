@@ -117,10 +117,11 @@ CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_tools IS
    --
    TYPE t_tab_json_intra_clear IS TABLE OF VARCHAR2(1) INDEX BY VARCHAR2(500);
    TYPE t_tab_json_frag IS TABLE OF VARCHAR2(32767) INDEX BY VARCHAR2(500);
-   TYPE t_tab_output IS TABLE OF VARCHAR2(32000) INDEX BY BINARY_INTEGER;
+   TYPE t_tab_output IS TABLE OF VARCHAR2(32767) INDEX BY BINARY_INTEGER;
    TYPE t_tab_sql IS TABLE OF VARCHAR2(32767) INDEX BY BINARY_INTEGER;
    TYPE t_tab_pem IS TABLE OF r_rec_pem INDEX BY VARCHAR2(200); /*index is relationship_group_id with mr_group */
    TYPE t_tab_find_swap IS TABLE OF r_rec_find_swap INDEX BY BINARY_INTEGER; /* find/swap cache */
+   TYPE t_tab_ctx IS TABLE OF VARCHAR2(500) INDEX BY VARCHAR2(30);
    --
    -- Used for cache of json "documents by example" in fn_make_json.
    TYPE t_rec_pejl IS RECORD(
@@ -140,6 +141,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_tools IS
    g_sql_array_debug      t_tab_sql;
    g_cache_pem            t_tab_pem;
    g_cache_find_swap      t_tab_find_swap;
+   g_cache_ctx            t_tab_ctx;
    g_output               t_tab_output;
    g_run_context          VARCHAR2(50);
    --
@@ -1110,6 +1112,67 @@ CREATE OR REPLACE PACKAGE BODY pkg_pre_etl_tools IS
       raise_application_error(-20000
                              ,'Cannot determine which to use... lookup, function (or in the case of json the array).');
    END ex_cannot_choose_fn_or_lk;
+
+   ----------------------------------------------------------------------------
+
+   FUNCTION fn_rep_ctx_with_lit_from_cache(i_sql IN VARCHAR2)
+      RETURN VARCHAR2 IS
+      l_nth PLS_INTEGER := 1;
+      l_cnt PLS_INTEGER := 0;
+      l_pos PLS_INTEGER := 0;
+      l_key VARCHAR2(30);
+      TYPE t_rep_rec IS RECORD(
+          st  PLS_INTEGER
+         ,ctx VARCHAR2(32767)
+         ,en  PLS_INTEGER
+         ,rep VARCHAR2(32767));
+      TYPE t_rep IS TABLE OF t_rep_rec INDEX BY BINARY_INTEGER;
+   
+      l_rep       t_rep;
+      l_sql       VARCHAR2(32767) := i_sql;
+      l_sql_upper VARCHAR2(32767) := upper(l_sql);
+   BEGIN
+      l_cnt := 1;
+      WHILE TRUE
+      LOOP
+         l_pos := instr(l_sql_upper
+                       ,'PKG_PRE_ETL_TOOLS.FN_GET_CONTEXT_VALUE'
+                       ,1
+                       ,l_nth);
+      
+         l_nth := l_nth + 1;
+         IF l_pos = 0
+         THEN
+            EXIT;
+         END IF;
+         l_key := substr(l_sql_upper
+                        ,instr(l_sql_upper, chr(39), l_pos, 1) + 1
+                        ,(instr(l_sql_upper, chr(39), l_pos, 2)) - 2 -
+                         instr(l_sql_upper, chr(39), l_pos, 1) + 1);
+         IF g_cache_ctx.EXISTS(l_key)
+         THEN
+            l_rep(l_cnt).st := l_pos;
+            l_rep(l_cnt).ctx := chr(39) || g_cache_ctx(l_key) ||
+                                chr(39);
+            l_rep(l_cnt).en := instr(l_sql_upper, ')', l_pos, 1) + 1;
+            l_rep(l_cnt).rep := substr(l_sql
+                                      ,l_rep(l_cnt).st
+                                      ,l_rep(l_cnt)
+                                       .en - l_rep(l_cnt).st);
+            l_cnt := l_cnt + 1;
+         END IF;
+      END LOOP;
+      --
+      IF l_rep.COUNT > 0
+      THEN
+         FOR i IN l_rep.FIRST .. l_rep.LAST
+         LOOP
+            l_sql := REPLACE(l_sql, l_rep(i).rep, l_rep(i).ctx);
+         END LOOP;
+      END IF;
+      --
+      RETURN l_sql;
+   END fn_rep_ctx_with_lit_from_cache;
 
    ----------------------------------------------------------------------------
 
@@ -3948,12 +4011,12 @@ not(starts-with(.,'-0.' )))
                      IF l_buf.comment_type = 'A'
                      THEN
                         -- no need to contextualize the sql here as it gets done in the : fn_sql_to_json_array
-                        l_json := fn_pretty_json(fn_sql_to_json_array(i_sql       => l_sql
+                        l_json := fn_pretty_json(fn_sql_to_json_array(i_sql       => fn_rep_ctx_with_lit_from_cache(i_sql => l_sql)
                                                                      ,i_mig_group => i_mig_group)) ||
                                   l_addition;
                      ELSIF l_buf.comment_type = 'V'
                      THEN
-                        l_json := fn_sql_to_vanilla_array(i_sql       => fn_contextualize(i_subject => l_sql
+                        l_json := fn_sql_to_vanilla_array(i_sql       => fn_contextualize(i_subject => fn_rep_ctx_with_lit_from_cache(i_sql => l_sql)
                                                                                          ,i_context => g_run_context)
                                                          ,i_mig_group => i_mig_group) ||
                                   l_addition;
@@ -4320,6 +4383,7 @@ not(starts-with(.,'-0.' )))
    ----------------------------------------------------------------------------
    /* FWD DECLARATION for procedure used in fn_make_json */
    PROCEDURE pr_populate_pem_cache(i_introspect_step IN VARCHAR2 DEFAULT NULL);
+   PROCEDURE pr_populate_ctx_value_cache(i_introspect_step IN VARCHAR2 DEFAULT NULL);
    ----------------------------------------------------------------------------
 
    FUNCTION fn_make_json
@@ -4481,6 +4545,7 @@ not(starts-with(.,'-0.' )))
       --
       pr_populate_pem_cache(i_introspect_step => i_introspect_step);
       pr_populate_find_swap_cache(i_introspect_step => i_introspect_step);
+      pr_populate_ctx_value_cache(i_introspect_step => i_introspect_step);
       --
       --
       g_row_count := g_row_count + 1;
@@ -4569,6 +4634,16 @@ not(starts-with(.,'-0.' )))
                                                        ,i_mode                   => 'START');
       
          l_dbms_sql_cursor := dbms_sql.open_cursor;
+         l_dynamic_select  := fn_rep_ctx_with_lit_from_cache(i_sql => l_dynamic_select);
+         IF i_debug_mode = 'TRUE'
+         THEN
+            pr_dbms_output('******************************' ||
+                           chr(10) ||
+                           'Replaced Ctx Dynamic Select  :' ||
+                           chr(10) ||
+                           '******************************' ||
+                           chr(10) || l_dynamic_select);
+         END IF;
          dbms_sql.parse(l_dbms_sql_cursor
                        ,l_dynamic_select
                        ,dbms_sql.native);
@@ -7116,6 +7191,7 @@ not(starts-with(.,'-0.' )))
       g_cache_find_swap.delete;
       g_tab_of_t_tab_pejl.delete;
       g_tab_mapped_cache.delete;
+      g_cache_ctx.delete;
    END pr_clear_json_cache;
 
    ----------------------------------------------------------------------------
@@ -7146,6 +7222,32 @@ not(starts-with(.,'-0.' )))
       END IF;
    END pr_populate_find_swap_cache;
 
+   ----------------------------------------------------------------------------
+
+   PROCEDURE pr_populate_ctx_value_cache(i_introspect_step IN VARCHAR2 DEFAULT NULL) IS
+      const_intro_pop_ctx_val_cache CONSTANT VARCHAR2(30) := 'ctx value cache population'; /* Monitor the occasional context cache population. */
+   BEGIN
+      IF g_cache_ctx.COUNT = 0
+      THEN
+         pkg_pre_etl_utilities.pr_introspect_monitoring(i_introspect_step        => i_introspect_step
+                                                       ,i_introspect_context     => 'Any'
+                                                       ,i_aspect_being_monitored => const_intro_pop_ctx_val_cache
+                                                       ,i_mode                   => 'START');
+         --
+         FOR i_buf IN (SELECT attribute
+                             ,VALUE
+                         FROM gv$globalcontext a
+                        WHERE a.namespace = 'MIGRATION_CONTEXT')
+         LOOP
+            g_cache_ctx(i_buf.attribute) := i_buf.value;
+         END LOOP;
+         --
+         pkg_pre_etl_utilities.pr_introspect_monitoring(i_introspect_step        => i_introspect_step
+                                                       ,i_introspect_context     => 'Any'
+                                                       ,i_aspect_being_monitored => const_intro_pop_ctx_val_cache
+                                                       ,i_mode                   => 'END');
+      END IF;
+   END pr_populate_ctx_value_cache;
    ----------------------------------------------------------------------------
 
    PROCEDURE pr_populate_pem_cache(i_introspect_step IN VARCHAR2 DEFAULT NULL) IS
@@ -7358,7 +7460,8 @@ not(starts-with(.,'-0.' )))
                         ,perjl.document_name AS document_name
                         ,to_char(perjl.line_number) AS line_number
                         ,perjl.mr_group AS map_rules_group
-                        ,pkg_pre_etl_utilities.fn_get_hash_for_clob(i_clob => pec.relationship_group_id||'-'||pec.comments) as hash_value
+                        ,pkg_pre_etl_utilities.fn_get_hash_for_clob(i_clob => pec.relationship_group_id || '-' ||
+                                                                              pec.comments) AS hash_value
            FROM pre_etl_comments pec
            JOIN pre_etl_related_json_lines perjl
              ON (perjl.relationship_group_id =
@@ -7381,7 +7484,7 @@ not(starts-with(.,'-0.' )))
                         ,pejl.document_name AS document_name
                         ,to_char(pejl.line_number) AS line_number
                         ,'Not Applicable' AS map_rules_group
-                        ,NULL as hash_value
+                        ,NULL AS hash_value
            FROM pre_etl_json_lines pejl
            JOIN pre_etl_json_document pejd
              ON (pejd.document_name = pejl.document_name)
@@ -7410,7 +7513,7 @@ not(starts-with(.,'-0.' )))
                         ,pemh.migration_group AS document_name
                         ,pemh.migration_name AS line_number
                         ,pemh.migration_group AS map_rules_group
-                        ,NULL as hash_value
+                        ,NULL AS hash_value
            FROM pre_etl_migration_header pemh
            LEFT JOIN pre_etl_migration_detail pemd
              ON (pemd.migration_group = pemh.migration_group AND
