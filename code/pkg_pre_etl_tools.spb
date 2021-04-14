@@ -3141,6 +3141,24 @@ not(starts-with(.,'-0.' )))
    END fn_related_frag;
 
    ----------------------------------------------------------------------------
+   FUNCTION fn_get_document_type(i_document_name IN VARCHAR2)
+      RETURN VARCHAR2 result_cache IS
+   
+      CURSOR cur_pejd(c_document_name IN VARCHAR2) IS
+         SELECT pejd.document_type
+           FROM pre_etl_json_document pejd
+          WHERE pejd.document_name = c_document_name;
+   
+      cur_pejd_buf cur_pejd%ROWTYPE;
+   BEGIN
+      OPEN cur_pejd(c_document_name => i_document_name);
+      FETCH cur_pejd
+         INTO cur_pejd_buf;
+      CLOSE cur_pejd;
+      RETURN cur_pejd_buf.document_type;
+   END fn_get_document_type;
+
+   -------------------------------------------------------------------------------
 
    FUNCTION fn_allow_relationship
    (
@@ -3151,25 +3169,6 @@ not(starts-with(.,'-0.' )))
      ,i_relate_to_line_number IN NUMBER
    ) RETURN BOOLEAN IS
       l_return_bool BOOLEAN := TRUE;
-   
-      FUNCTION fn_get_document_type(i_document_name IN VARCHAR2)
-         RETURN VARCHAR2 IS
-      
-         CURSOR cur_pejd(c_document_name IN VARCHAR2) IS
-            SELECT pejd.document_type
-              FROM pre_etl_json_document pejd
-             WHERE pejd.document_name = c_document_name;
-      
-         cur_pejd_buf cur_pejd%ROWTYPE;
-      BEGIN
-         OPEN cur_pejd(c_document_name => i_document_name);
-         FETCH cur_pejd
-            INTO cur_pejd_buf;
-         CLOSE cur_pejd;
-         RETURN cur_pejd_buf.document_type;
-      END fn_get_document_type;
-   
-      -------------------------------------------------------------------------------
    
       FUNCTION fn_has_relations_to_stored
       (
@@ -4453,6 +4452,15 @@ not(starts-with(.,'-0.' )))
             RETURN i_string;
          END IF;
       END fn_remove_fo;
+      --
+      FUNCTION fn_run_as_autonomous_transaction(i_dbms_sql_cursor IN INTEGER)
+         RETURN NUMBER IS
+         PRAGMA AUTONOMOUS_TRANSACTION;
+      BEGIN
+         l_rows := dbms_sql.execute(i_dbms_sql_cursor);
+         COMMIT;
+         RETURN l_rows;
+      END fn_run_as_autonomous_transaction;
    BEGIN
       g_output.delete;
       g_run_context := fn_get_context_value(i_attr => migration_run_framework.fn_ctx_run_context);
@@ -4740,8 +4748,9 @@ not(starts-with(.,'-0.' )))
                                                        ,i_introspect_context     => i_document
                                                        ,i_aspect_being_monitored => const_intro_execute_dynamic
                                                        ,i_mode                   => 'START');
-      
-         l_rows := dbms_sql.execute(l_dbms_sql_cursor);
+         --
+         l_rows := fn_run_as_autonomous_transaction(i_dbms_sql_cursor => l_dbms_sql_cursor);
+         --
          -- Fetches just the one row from dual...
          l_rows := dbms_sql.fetch_rows(l_dbms_sql_cursor);
          --
@@ -4862,12 +4871,26 @@ not(starts-with(.,'-0.' )))
       -- invalid (if used incorrectly).
       IF i_validate_json = 'TRUE'
       THEN
+         IF i_fragment_insertion = 'FALSE'
+            AND fn_get_document_type(i_document_name => i_document) =
+            'STORED FRAGMENT'
+         THEN
+            -- Its possible a stored fragment could be stored separately (possibly on the same row as the main document)
+            -- This removes the subdocument attr name, leaving the bracketed anonymous JSON.
+            l_return := TRIM(substr(l_return
+                                   ,instr(l_return, ':') + 1));
+            IF i_debug_mode = 'TRUE'
+            THEN
+               pr_dbms_output('FRAGMENT USED as JSON :' || l_return);
+            END IF;                                   
+         END IF;
          l_return2 := fn_find_and_swap(i_find_swap_string => fn_remove_fo(fn_remove_fo(fn_remove_fo(fn_flattened_json(i_json_text => l_return)
                                                                                                    ,'\s*,"FACTOREDOUT":{}')
                                                                                       ,'\s*"FACTOREDOUT":{},')
                                                                          ,'\s*"FACTOREDOUT":{}')
                                       ,i_mig_group        => i_mig_group);
          l_return2 := fn_intra_clear(i_string => l_return2);
+         --
          l_return2 := fn_flattened_json(i_json_text => l_return2); /* final validate after handling any find/swaps. */
          --
          IF l_return2 IS NULL
