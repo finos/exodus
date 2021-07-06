@@ -2,7 +2,7 @@ CREATE OR REPLACE PACKAGE BODY user_backup_restore_steps IS
 
    /*=================================================================================================
        Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
-       
+   
        Developed by Christian Leigh
 
        Copyright 2018 IHS Markit
@@ -21,7 +21,7 @@ CREATE OR REPLACE PACKAGE BODY user_backup_restore_steps IS
 
      =================================================================================================  
    */
-   
+
    PROCEDURE pr_exec(i_exec IN VARCHAR2) IS
    BEGIN
       dbms_output.put_line('Executing : ' || i_exec);
@@ -36,6 +36,12 @@ CREATE OR REPLACE PACKAGE BODY user_backup_restore_steps IS
      ,i_mode        IN VARCHAR2
    ) IS
    BEGIN
+      IF i_mode NOT IN ('ENABLE', 'DISABLE')
+      THEN
+         raise_application_error(-20000
+                                ,'user_backup_restore_steps : pr_handle_constraint : Unrecognised i_mode.  Must be ENABLE or DISABLE.');
+      END IF;
+      --
       FOR c IN (SELECT DISTINCT c.owner
                                ,c.table_name
                                ,c.constraint_name

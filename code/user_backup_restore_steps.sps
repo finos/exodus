@@ -2,7 +2,7 @@ CREATE OR REPLACE PACKAGE user_backup_restore_steps AUTHID CURRENT_USER IS
 
    /*=================================================================================================
        Supporting Package For ETL / Migration Utilities For Tabular to Tabular+JSON migration.
-       
+   
        Developed by Christian Leigh
 
        Copyright 2018 IHS Markit
@@ -41,6 +41,20 @@ CREATE OR REPLACE PACKAGE user_backup_restore_steps AUTHID CURRENT_USER IS
      ,i_context        IN VARCHAR2
      ,i_overwrite_bool IN BOOLEAN
    );
+
+   /*------------------------------------------------------------------------------------
+   ** Disable and Enable Constraints for a given schema.
+   **
+   ** @param i_schema_name            The schema being backed up.
+   **
+   ** @param i_mode                   Either : DISABLE or ENABLE
+   **
+   */   
+   PROCEDURE pr_handle_constraint
+   (
+      i_schema_name IN VARCHAR2
+     ,i_mode        IN VARCHAR2
+   );   
 
    /*------------------------------------------------------------------------------------
    ** Restores the backup.
