@@ -1,3 +1,7 @@
+[![FINOS - Archived](https://cdn.jsdelivr.net/gh/finos/contrib-toolbox@master/images/badge-archived.svg)](https://community.finos.org/docs/governance/Software-Projects/stages/archived)
+
+This project is archived, which means that it's in read-only state; you can download and use this code, but please be aware that it is at your own risk ass there is a potential for bugs and security vulnerabilities. If you're interested to restore development activities on this project, please email help@finos.org
+
 # EXODUS : Map > Document > Migrate > JSON & Tables
 
 ![alt text](https://github.com/finos/exodus/blob/master/exodus_logo_small.jpg "Exodus")
